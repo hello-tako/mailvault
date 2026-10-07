@@ -485,6 +485,70 @@ What that does *not* carry over, because browsers scope it per origin:
 To retire the old hostname: drop its route from `wrangler.jsonc`, redeploy, and remove
 `mail.omnipos.tech*` from the Access app's `self_hosted_domains`.
 
+### The customer code portal (`/c/:token`) — not deployed yet
+
+The owner sells accounts that sign up with these addresses, so a buyer needs one number from
+one mailbox and nothing else. `/c/:token` is that: one page, one number, no login. It is
+mounted outside `/api/*` on purpose — the Access gate that protects the mailbox is what keeps
+a stranger out of somebody else's mail, and a public path must never live under it.
+
+**It cannot work on the two live hostnames.** Access here covers *every* path on
+`mail.tungjp.store` and `mail.omnipos.tech` (verified: `/api/health`, `/c/test` and `/portal`
+all 302 to the Access login), so a buyer's link would stop at the owner's login screen. The
+portal needs its own hostname with no Access app listing it.
+
+To turn it on:
+
+```bash
+# 1. Apply the grants table to the remote D1.
+pnpm --filter @mailvault/worker db:migrate:remote
+
+# 2. DNS: an A/AAAA record for code.omnipos.tech pointing at the Worker (proxied),
+#    then a third custom_domain route in apps/worker/wrangler.jsonc:
+#      { "pattern": "code.omnipos.tech", "custom_domain": true }
+#    Do NOT add it to the Access app's self_hosted_domains — that list is what gates it.
+
+# 3. Un-comment PORTAL_ORIGIN in wrangler.jsonc so minted links point at the public
+#    hostname instead of the gated one, then redeploy:
+cd apps/worker && pnpm build:web && npx wrangler deploy
+
+# 4. Check it from somewhere with no Access session.
+curl -i https://code.omnipos.tech/c/not-a-real-link-000000   # 404, and never a login redirect
+```
+
+Email Routing, MX records and the API token are untouched by any of this: the portal reads D1
+and nothing else, so there is no new Cloudflare permission to grant.
+
+**Understand what the third hostname actually opens.** Routes point domains at a Worker, not at
+a path — so `code.omnipos.tech` would also answer `POST /api/*`, with no Access in front of it,
+on the same Worker as the mailbox. What stops that is the Worker itself: `src/auth.ts` verifies
+the Access JWT's signature, issuer, audience and expiry on every `/api/*` call, and a request
+that arrives through an ungated hostname simply has no assertion to present, so it gets
+`401 UNAUTHORIZED`. `DEV_AUTH_BYPASS` is inert in production and `checkCsrf` still rejects any
+Origin that is neither `APP_ORIGIN` nor the host being asked. If that single layer ever stops
+being enough, the fix is a second small Worker on the public hostname with a read-only D1
+binding and no API token at all — not an Access exception on a path.
+
+What a link can say: the newest code for its own alias that arrived in the last 30 minutes in
+mail that passed authentication, how old it is, and the address it arrived at. What it can
+never say: a subject, a body, an attachment, a link, a message list, or anything about another
+address.
+
+The credential model, since the token is the only thing standing between a buyer and a
+mailbox:
+
+- 192 random bits (`/c/:token`), stored **only** as a SHA-256 hash. The list API returns every
+  link's state and cannot rebuild any of them; the token appears in exactly one response.
+- Time-bounded (5 min … 7 days, default 1 h) and optionally look-capped. Polling the JSON
+  endpoint does not consume a look, so a cap of 5 means five customers, not five refreshes.
+- Revoking writes a timestamp rather than deleting, so the record of who was shown what
+  survives the sale. `GET /c/:token` is `no-store`, `noindex`, and `frame-ancestors 'none'`, so
+  the shop must send buyers to the link in a new tab instead of embedding it.
+- Per-isolate, best-effort throttle on page views and bad tokens. It raises the cost of
+  scraping; the token is the real defence.
+
+Links speak Vietnamese unless the URL says `?lang=en`.
+
 ### API token scope (least privilege)
 
 Create **one** User API Token.

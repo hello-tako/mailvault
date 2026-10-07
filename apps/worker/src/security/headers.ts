@@ -61,7 +61,14 @@ export function decorateResponse(env: Env | undefined, url: string, res: Respons
   if (res.status < 200) return res;
 
   const headers = new Headers(res.headers);
-  for (const [k, v] of securityHeaders(env, url)) headers.set(k, v);
+  for (const [k, v] of securityHeaders(env, url)) {
+    // A route that authored a header keeps its own value; everything else is applied to it.
+    // The portal page needs both halves of that: it ships one inline script, which the app's
+    // `script-src 'self'` would refuse to run, and it carries a token in its URL, so
+    // `no-referrer` is tighter than the default.
+    if (headers.has(k)) continue;
+    headers.set(k, v);
+  }
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 

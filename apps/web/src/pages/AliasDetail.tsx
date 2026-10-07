@@ -5,6 +5,7 @@ import { useAsync } from "../lib/useAsync";
 import { fullTime, relativeTime } from "../lib/format";
 import { t } from "../lib/i18n";
 import { CopyButton, ErrorBanner, Loading } from "../components/ui";
+import { PortalLinks } from "../components/PortalLinks";
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -101,6 +102,8 @@ export function AliasDetail({ id }: { id: string }) {
             <Stat label={t("alias.statFirst")} value={stats.firstReceivedAt ? fullTime(stats.firstReceivedAt) : t("common.dash")} />
             <Stat label={t("alias.statLast")} value={stats.lastReceivedAt ? relativeTime(stats.lastReceivedAt) : t("common.dash")} />
           </div>
+
+          <PortalLinks aliasId={a.id} />
 
           <div className="mt">
             <h2>{t("alias.notes")}</h2>

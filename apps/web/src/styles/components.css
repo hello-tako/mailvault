@@ -1222,6 +1222,17 @@ tr:last-child td { border-bottom: 0; }
 .pill.warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-tint); }
 .pill.warn::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
+/* A value the owner is about to copy out of the page: selectable, wide, and its own box. */
+.mono-box {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: var(--text-sm);
+  user-select: all;
+}
+
 /* One line per destination: this is where a send actually went, address by address. */
 .recip-status {
   list-style: none;

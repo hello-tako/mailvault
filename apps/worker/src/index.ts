@@ -28,13 +28,14 @@ const app = createApp();
 
 export default {
   /**
-   * HTTP: `/api/*` is served by the authenticated router; every other path falls
-   * through to Workers Static Assets (the SPA), which handles its own routing.
-   * Responses are hardened with security headers here so errors and assets included.
+   * HTTP: `/api/*` is served by the authenticated router, `/c/*` by the customer code portal
+   * (its own credential, no Access), and every other path falls through to Workers Static
+   * Assets (the SPA), which handles its own routing. Responses are hardened with security
+   * headers here so errors and assets are included.
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+    if (url.pathname === "/api" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/c/")) {
       const res = await app.fetch(request, env, ctx);
       return decorateResponse(env, request.url, res);
     }

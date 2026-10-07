@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AliasStatus,
   CreateAliasSchema,
+  CreatePortalLinkSchema,
   DeleteAliasSchema,
   LocalPartMode,
   UpdateAliasSchema,
@@ -20,14 +21,17 @@ import {
   updateAlias,
 } from "../db/aliases";
 import { getDomainById } from "../db/domains";
+import { createGrant, listGrants, revokeGrant } from "../db/portal";
 import { conflict, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
+import { portalOrigin, portalPath } from "../portal/link";
 import { randomLocalPart } from "../lib/util";
 import { deleteKeys } from "../storage/r2";
 import { actorOf, parseQuery, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
 
 const IdParam = z.object({ id: z.string().min(1) });
+const GrantParam = z.object({ id: z.string().min(1), grantId: z.string().min(1) });
 const ListQuery = z.object({
   q: z.string().max(200).optional(),
   /** Archived aliases are hidden by default so the working list stays short. */
@@ -126,4 +130,43 @@ export const aliasesRoute = new Hono<AppEnv>()
     if (rawKeys.length) await deleteKeys(c.env.MAIL_BUCKET, rawKeys);
     log.info("alias_deleted", { actor: actorOf(c).email, aliasId: id, purgeMessages, r2Keys: rawKeys.length });
     return c.json({ deleted: true, purgedMessages: purgeMessages, r2ObjectsRemoved: rawKeys.length });
+  })
+
+  /*
+   * Portal links: what the owner hands to a buyer. The token appears in exactly one response
+   * and is never stored in a readable form, so the list endpoint can show every link's state
+   * — who looked, when it dies — without being able to rebuild any of them.
+   */
+  .post("/api/aliases/:id/portal-links", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const alias = await getAliasById(c.env.DB, id);
+    if (!alias) throw notFound("Alias not found");
+    const body = await readJson(c, CreatePortalLinkSchema);
+    const { grant, token } = await createGrant(c.env.DB, {
+      aliasId: id,
+      label: body.label ?? null,
+      ttlMinutes: body.ttlMinutes,
+      maxViews: body.maxViews ?? null,
+    });
+    log.info("portal_link_created", { actor: actorOf(c).email, aliasId: id, grantId: grant.id, ttlMinutes: body.ttlMinutes });
+    const origin = new URL(c.req.url).origin;
+    return c.json({ grant, token, url: `${portalOrigin(c.env, origin)}${portalPath(token)}` });
+  })
+
+  .get("/api/aliases/:id/portal-links", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    if (!(await getAliasById(c.env.DB, id))) throw notFound("Alias not found");
+    const now = Date.now();
+    const items = await listGrants(c.env.DB, id);
+    return c.json({
+      items: items.map((g) => ({ ...g, active: !g.revokedAt && Date.parse(g.expiresAt) > now && (g.maxViews === null || g.views < g.maxViews) })),
+    });
+  })
+
+  .delete("/api/aliases/:id/portal-links/:grantId", async (c) => {
+    const { id, grantId } = GrantParam.parse({ id: c.req.param("id"), grantId: c.req.param("grantId") });
+    const removed = await revokeGrant(c.env.DB, grantId, id);
+    if (!removed) throw notFound("Link not found");
+    log.info("portal_link_revoked", { actor: actorOf(c).email, aliasId: id, grantId });
+    return c.json({ revoked: true });
   });

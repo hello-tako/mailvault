@@ -26,6 +26,9 @@
     "CF_ACCOUNT_ID": "ef250a88911fd24073cb73d1c07e0218",
     "MAIL_WORKER_NAME": "mail-vault",
     "APP_ORIGIN": "https://mail.tungjp.store",
+    // The origin printed in a customer's code link. Leave unset until a hostname with no
+    // Access in front of it exists — see DEPLOYMENT.md, "The customer code portal".
+    // "PORTAL_ORIGIN": "https://code.omnipos.tech",
     "CF_ACCESS_TEAM_DOMAIN": "https://little-bar-8ffa.cloudflareaccess.com",
     "CF_ACCESS_AUD": "61f4423b34844e1a86c2b4680a77549acab6026bb3a0ed78af75d78ff00d10b4",
     "MAX_MESSAGE_BYTES": "20971520",

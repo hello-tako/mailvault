@@ -7,6 +7,7 @@ import type {
   BulkMessageResult,
   ComposeInput,
   CreateAliasInput,
+  CreatePortalLinkInput,
   DashboardStats,
   Domain,
   DriftReport,
@@ -16,6 +17,8 @@ import type {
   MessageCounters,
   Paginated,
   Passkey,
+  PortalLink,
+  PortalLinkCreated,
   PreflightResult,
   ProvisionOutcome,
   PushOutcome,
@@ -140,6 +143,20 @@ export const api = {
   disableAlias: (id: string) => request<Alias>(`/aliases/${encodeURIComponent(id)}/disable`, mutation()),
   deleteAlias: (id: string, purgeMessages: boolean) =>
     request<{ deleted: boolean }>(`/aliases/${encodeURIComponent(id)}`, mutation({ purgeMessages }, "DELETE")),
+
+  /**
+   * Portal links for one alias. `create` is the only call that ever returns the token, so the
+   * list below can show a link's whole life without being able to rebuild any of them.
+   */
+  listPortalLinks: (id: string) =>
+    request<{ items: PortalLink[] }>(`/aliases/${encodeURIComponent(id)}/portal-links`),
+  createPortalLink: (id: string, input: CreatePortalLinkInput) =>
+    request<PortalLinkCreated>(`/aliases/${encodeURIComponent(id)}/portal-links`, mutation(input)),
+  revokePortalLink: (id: string, grantId: string) =>
+    request<{ revoked: boolean }>(
+      `/aliases/${encodeURIComponent(id)}/portal-links/${encodeURIComponent(grantId)}`,
+      mutation(undefined, "DELETE"),
+    ),
 
   listMessages: (query: Partial<MessageListQuery>) =>
     request<Paginated<MessageSummary>>(`/messages${qs({ ...query })}`),
