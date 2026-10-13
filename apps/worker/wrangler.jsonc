@@ -27,6 +27,7 @@
 
   "vars": {
     "ENVIRONMENT": "production",
+    "MAILVAULT_CUSTOMER_OTP_ENABLED": "false",
     "CF_ACCOUNT_ID": "ef250a88911fd24073cb73d1c07e0218",
     "MAIL_WORKER_NAME": "mail-vault",
     "APP_ORIGIN": "https://mail.tungjp.store",
