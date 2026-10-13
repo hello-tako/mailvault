@@ -36,3 +36,13 @@ Findings addressed: no existing customer entitlement; old session is not recent 
 | `apps/worker/wrangler.jsonc` | feature OFF default and scoped named service configuration |
 
 Reporting successors add these seven required reports; Portfolio also adds review-only `.github/workflows/otp-bridge.yml` and `scripts/assert-otp-review-build.mjs` for repeatable final-SHA evidence. CI has no production credentials/deploy job. No generated screenshots, real mapping file, credentials or email body are committed.
+
+Review supplement: `apps/worker/test/integration/api.test.ts` verifies the actual default Worker fetch/router has no customer HTTP OTP mount even with the OTP flag ON, and production unauthenticated requests remain 401. The native linked harness isolates the reader and uses a fixture HTTP handler; its 404 is transport-only evidence, not the actual router isolation proof.
+
+PR receipts: MailVault https://github.com/takovn2/mailvault/pull/13 and Portfolio https://github.com/takovn2/tungjpstore-portfolio/pull/1. Initial exact-head CI passes: MailVault run 38433814625 at `2c12a69e4a1d5af37e7fc2752e2917004af9fecf`; Portfolio run 38434002462 at `17daa0bafc283922459e86b2a55e0a3b5e3044fe`. Final successor head/CI links are in the PR validation receipt. Independent review remains unassigned/unapproved.
+
+## Review receipt references
+
+The exact file manifest is [00-preflight.md](00-preflight.md); RPC/auth decisions are [01-architecture-contract.md](01-architecture-contract.md), schema/state details are reports 02/03, commands/counts/security negatives and CI receipts are [04-security-test-matrix.md](04-security-test-matrix.md), remaining runtime prerequisites are [05-staging-certification.md](05-staging-certification.md), and operator-only recovery is [06-release-and-rollback.md](06-release-and-rollback.md). These references apply to this deliverable.
+
+PRs: [MailVault #13](https://github.com/takovn2/mailvault/pull/13), [Portfolio #1](https://github.com/takovn2/tungjpstore-portfolio/pull/1). Independent reviewer: unassigned, not approved; drafts await separate P5 review. Initial exact-head CI: [MailVault](https://github.com/takovn2/mailvault/actions/runs/38433814625), [Portfolio](https://github.com/takovn2/tungjpstore-portfolio/actions/runs/38434002462). Final head receipts are attached to the PRs; flags OFF and production mutations NONE.

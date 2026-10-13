@@ -115,6 +115,18 @@ beforeEach(async () => {
 });
 
 describe("HTTP API", () => {
+  it("never mounts the named customer reader as a public or owner HTTP OTP route", async () => {
+    const env = { ...TEST_ENV, MAILVAULT_CUSTOMER_OTP_ENABLED: "true", OTP_BRIDGE_RPC_HMAC_KEY: "synthetic-http-boundary-key-32-characters" };
+    for (const path of ["/api/customer/otp", "/api/otp", "/api/customer-otp/lookupLoginOtp"]) {
+      const response = await worker.fetch(req(path, { method: "POST", headers: mutationHeaders,
+        body: JSON.stringify({ aliasId: "synthetic-alias", providerKey: "synthetic" }) }), env, CTX);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toMatch(/messageRef|receivedAt|593821/);
+      const publicResponse = await worker.fetch(req(path), { ...env, ENVIRONMENT: "production", DEV_AUTH_BYPASS: "false" }, CTX);
+      expect(publicResponse.status).toBe(401);
+    }
+  });
+
   it("serves health without auth", async () => {
     const res = await worker.fetch(req("/api/health"), TEST_ENV, CTX);
     expect(res.status).toBe(200);

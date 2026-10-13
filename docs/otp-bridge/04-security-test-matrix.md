@@ -11,7 +11,7 @@ Author review only; independent reviewer not assigned/approved. Flags OFF; produ
 |---|---|---|
 | MailVault `pnpm install --frozen-lockfile` | PASS, lock unchanged | local install |
 | MailVault `pnpm typecheck`, `pnpm lint` | PASS | all packages |
-| MailVault `pnpm test` | 489 Worker + 106 web PASS; 0 FAIL/SKIP | 37 Worker + 17 web files, includes 12 true-workerd DKIM tests |
+| MailVault `pnpm test` | 490 Worker + 106 web PASS; 0 FAIL/SKIP | 37 Worker + 17 web files, includes 12 true-workerd DKIM tests |
 | MailVault focused unit/integration customer OTP | 63 PASS, 0 FAIL/SKIP | 33 unit + 30 D1/R2 integration |
 | MailVault `pnpm build` | PASS | SPA build + Worker deploy dry-run only |
 | MailVault `pnpm test:e2e` | 60 PASS | built owner SPA, local Worker/D1/R2; desktop/mobile |
@@ -44,3 +44,13 @@ Author review only; independent reviewer not assigned/approved. Flags OFF; produ
 The native reader fixture installs synthetic cryptographic-evidence metadata; full MailVault verifier/ingest suites separately verify genuine signature behavior. Browser OTP calls use synthetic server responses; the separate native suite verifies real RPC transport. Neither constitutes real third-party provider/production receiving certification. No screenshots containing OTP are committed. Original failures (Node cannot import cloudflare:workers; test locator matched output implicit status; Miniflare API change; test fixture column/session names) were fixed without skipping assertions or weakening production checks.
 
 Raw local logs are transient `/tmp/otp-*` files; repository contains counts/commands and CI links rather than MIME bodies, mappings, OTP screenshots or secret values. CI receipts at the final PR SHA are linked in the PR; CI failures, if any, must be resolved before acceptance. Author review does not satisfy independent P5 review.
+
+Additional actual default-handler boundary test: POST to `/api/customer/otp`, `/api/otp`, `/api/customer-otp/lookupLoginOtp` returns 404 for authenticated owner context despite the OTP flag ON; production unauthenticated GET returns 401. This uses `src/index.ts` and the actual router, not the RPC harness HTTP fixture. Worker regression total becomes 490.
+
+GitHub CI receipts: [MailVault initial exact head](https://github.com/takovn2/mailvault/actions/runs/38433814625), [Portfolio initial exact head](https://github.com/takovn2/tungjpstore-portfolio/actions/runs/38434002462); final receipts are recorded in each PR.
+
+## Review receipt references
+
+The exact file manifest is [00-preflight.md](00-preflight.md); RPC/auth decisions are [01-architecture-contract.md](01-architecture-contract.md), schema/state details are reports 02/03, commands/counts/security negatives and CI receipts are [04-security-test-matrix.md](04-security-test-matrix.md), remaining runtime prerequisites are [05-staging-certification.md](05-staging-certification.md), and operator-only recovery is [06-release-and-rollback.md](06-release-and-rollback.md). These references apply to this deliverable.
+
+PRs: [MailVault #13](https://github.com/takovn2/mailvault/pull/13), [Portfolio #1](https://github.com/takovn2/tungjpstore-portfolio/pull/1). Independent reviewer: unassigned, not approved; drafts await separate P5 review. Initial exact-head CI: [MailVault](https://github.com/takovn2/mailvault/actions/runs/38433814625), [Portfolio](https://github.com/takovn2/tungjpstore-portfolio/actions/runs/38434002462). Final head receipts are attached to the PRs; flags OFF and production mutations NONE.
