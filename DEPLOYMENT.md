@@ -508,10 +508,16 @@ What is in place since 2026-10-13:
 | Var | `PORTAL_ORIGIN=https://code.tungjp.store` in `wrangler.jsonc` |
 | Table | `portal_grants` (migration `0013`), applied to the remote D1 |
 
-Measured on the live hostname: `/api/health` 200, `/api/messages` **401** (not an Access
-redirect), `/c/not-a-real-link-000000` 404 with the portal's own page, and a minted link
-serving `{"state":"waiting",…}` while two page views counted and the JSON poll did not.
-`mail.tungjp.store` and `mail.omnipos.tech` still answer 302 to Access.
+The hostname serves `/c/*` and nothing else: `/`, `/inbox`, `/api/health` and `/api/messages`
+all answer a plain `404` there, so the owner's SPA is never published on a public domain. On
+`code.tungjp.store/c/<bad token>` the portal's own "link không hợp lệ" page answers instead, and
+a minted link served `{"state":"waiting",…}` while two page views counted and the JSON poll did
+not. `mail.tungjp.store` and `mail.omnipos.tech` still answer 302 to Access — the guard is
+host-scoped, not path-scoped.
+
+Before the guard, `/api/messages` on the ungated host returned `401` rather than an Access
+redirect, which is the measurement that matters for the section further down: the Worker's own
+JWT check, not the Access front door, is what protects the mailbox there.
 
 **Why a route and not a custom domain, and what that costs.** This machine's `wrangler login`
 cannot see the `tungjp.store` zone: `GET /zones?name=…` comes back empty for it, so
@@ -540,14 +546,17 @@ Two consequences to keep in mind:
   that can actually read the zones — not more hand-built SQL.
 
 **Understand what the third hostname actually opens.** Routing points a domain at a Worker, not
-at a path — so `code.tungjp.store` also answers `POST /api/*`, with no Access in front of it, on
-the same Worker as the mailbox. What stops that is the Worker itself: `src/auth.ts` verifies the
-Access JWT's signature, issuer, audience and expiry on every `/api/*` call, and a request that
-arrives through an ungated hostname simply has no assertion to present, so it gets
-`401 UNAUTHORIZED` — measured above. `DEV_AUTH_BYPASS` is inert in production and `checkCsrf`
-still rejects any Origin that is neither `APP_ORIGIN` nor the host being asked. If that single
-layer ever stops being enough, the fix is a second small Worker on the public hostname with a
-read-only D1 binding and no API token at all — not an Access exception on a path.
+at a path — so without a deliberate rule, `code.tungjp.store` would also answer `POST /api/*`,
+with no Access in front of it, on the same Worker as the mailbox. Two things stop that. The first
+is `isPortalHost()` in `src/index.ts`: on the portal origin, every path except `/c/*` is refused
+before it reaches any router. The second is the one that would still hold if that guard were ever
+removed: `src/auth.ts` verifies the Access JWT's signature, issuer, audience and expiry on every
+`/api/*` call, and a request that arrives through an ungated hostname simply has no assertion to
+present, so it gets `401 UNAUTHORIZED` — measured that way before the guard went in.
+`DEV_AUTH_BYPASS` is inert in production and `checkCsrf` still rejects any Origin that is neither
+`APP_ORIGIN` nor the host being asked. If those layers ever stop being enough, the fix is a second
+small Worker on the public hostname with a read-only D1 binding and no API token at all — not an
+Access exception on a path.
 
 What a link can say: the newest code for its own alias that arrived in the last 30 minutes in
 mail that passed authentication, how old it is, and the address it arrived at. What it can

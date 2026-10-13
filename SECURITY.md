@@ -69,6 +69,10 @@ A buyer needs one number from one mailbox, so that is the whole surface.
 - It lives **outside** `/api/*`, and `src/index.ts` routes `/c/*` to the Hono app while every
   other path still falls through to the SPA. Nothing about the portal may be moved under
   `/api`, because that prefix is where the Access gate lives.
+- On the portal's own hostname (`PORTAL_ORIGIN`), `/c/*` is the **only** thing served: every other
+  path, including `/api/*`, is refused before it reaches a router. A public domain must not host a
+  login-less look-alike of the owner's app, and one fewer surface is one fewer thing to get wrong.
+  The mailbox hostname is unaffected — the rule is keyed on the host, not the path.
 - The credential is the URL: 192 random bits, one per sale, scoped to one alias, stored only as
   a SHA-256 hash (`migrations/0013_portal_grants.sql`). A leak of D1 hands over no working link,
   and there is no enumerable column to attack — a guessed token has a 1-in-2^192 chance.
