@@ -485,49 +485,69 @@ What that does *not* carry over, because browsers scope it per origin:
 To retire the old hostname: drop its route from `wrangler.jsonc`, redeploy, and remove
 `mail.omnipos.tech*` from the Access app's `self_hosted_domains`.
 
-### The customer code portal (`/c/:token`) — not deployed yet
+### The customer code portal (`/c/:token`) — live on `code.tungjp.store`
 
 The owner sells accounts that sign up with these addresses, so a buyer needs one number from
 one mailbox and nothing else. `/c/:token` is that: one page, one number, no login. It is
 mounted outside `/api/*` on purpose — the Access gate that protects the mailbox is what keeps
 a stranger out of somebody else's mail, and a public path must never live under it.
 
-**It cannot work on the two live hostnames.** Access here covers *every* path on
+It could not live on the two mail hostnames: Access here covers *every* path on
 `mail.tungjp.store` and `mail.omnipos.tech` (verified: `/api/health`, `/c/test` and `/portal`
 all 302 to the Access login), so a buyer's link would stop at the owner's login screen. The
-portal needs its own hostname with no Access app listing it.
+`MailVault` Access app lists exactly those two domains and their `/*`, so a third subdomain of
+`tungjp.store` is outside it — which is the whole trick, and the reason the app-level check
+below matters.
 
-To turn it on:
+What is in place since 2026-10-13:
+
+| Piece | Value |
+| --- | --- |
+| DNS | `code.tungjp.store AAAA 100::` proxied, record `ef84e751a9f19ef6426388a7c824e7d5` |
+| Routing | zone route `code.tungjp.store/*` → `mail-vault`, route `f29f98d67cce4e57942eeea077138135` |
+| Var | `PORTAL_ORIGIN=https://code.tungjp.store` in `wrangler.jsonc` |
+| Table | `portal_grants` (migration `0013`), applied to the remote D1 |
+
+Measured on the live hostname: `/api/health` 200, `/api/messages` **401** (not an Access
+redirect), `/c/not-a-real-link-000000` 404 with the portal's own page, and a minted link
+serving `{"state":"waiting",…}` while two page views counted and the JSON poll did not.
+`mail.tungjp.store` and `mail.omnipos.tech` still answer 302 to Access.
+
+**Why a route and not a custom domain, and what that costs.** This machine's `wrangler login`
+cannot see the `tungjp.store` zone: `GET /zones?name=…` comes back empty for it, so
+`wrangler deploy` ends with *"Could not find zone for …"* even though the upload itself already
+succeeded, and `POST /zones/{id}/workers/routes` answers *"No access to the specified
+resource."* Both the DNS record and the route were therefore created through the API:
 
 ```bash
-# 1. Apply the grants table to the remote D1.
-pnpm --filter @mailvault/worker db:migrate:remote
+# DNS (proxied AAAA pointing at the Worker)
+POST /zones/8fbc70474390f47397310aee5ba9a370/dns_records
+  { "name": "code", "type": "AAAA", "content": "100::", "proxied": true }
 
-# 2. DNS: an A/AAAA record for code.omnipos.tech pointing at the Worker (proxied),
-#    then a third custom_domain route in apps/worker/wrangler.jsonc:
-#      { "pattern": "code.omnipos.tech", "custom_domain": true }
-#    Do NOT add it to the Access app's self_hosted_domains — that list is what gates it.
-
-# 3. Un-comment PORTAL_ORIGIN in wrangler.jsonc so minted links point at the public
-#    hostname instead of the gated one, then redeploy:
-cd apps/worker && pnpm build:web && npx wrangler deploy
-
-# 4. Check it from somewhere with no Access session.
-curl -i https://code.omnipos.tech/c/not-a-real-link-000000   # 404, and never a login redirect
+# Route (the Worker is attached through the service-routes endpoint, not the zone one)
+PUT  /accounts/ef250a88911fd24073cb73d1c07e0218/workers/services/mail-vault/environments/production/routes
+  [ { "pattern": "code.tungjp.store/*", "zone_id": "8fbc70474390f47397310aee5ba9a370" } ]
 ```
 
-Email Routing, MX records and the API token are untouched by any of this: the portal reads D1
-and nothing else, so there is no new Cloudflare permission to grant.
+Two consequences to keep in mind:
 
-**Understand what the third hostname actually opens.** Routes point domains at a Worker, not at
-a path — so `code.omnipos.tech` would also answer `POST /api/*`, with no Access in front of it,
-on the same Worker as the mailbox. What stops that is the Worker itself: `src/auth.ts` verifies
-the Access JWT's signature, issuer, audience and expiry on every `/api/*` call, and a request
-that arrives through an ungated hostname simply has no assertion to present, so it gets
-`401 UNAUTHORIZED`. `DEV_AUTH_BYPASS` is inert in production and `checkCsrf` still rejects any
-Origin that is neither `APP_ORIGIN` nor the host being asked. If that single layer ever stops
-being enough, the fix is a second small Worker on the public hostname with a read-only D1
-binding and no API token at all — not an Access exception on a path.
+- `code.tungjp.store` must stay **out** of `wrangler.jsonc`'s `routes`. Listing it there makes
+  every deploy fail on the zone lookup; leaving it out does not get it deleted — verified by
+  deploying with the entry removed and watching the hostname keep serving.
+- The same login cannot run `wrangler d1 migrations apply --remote` either (`7403`), so
+  migrations go through `POST /accounts/{id}/d1/database/{db}/query` and the `d1_migrations`
+  ledger row is inserted by hand. If this bothers you, the clean fix is a wrangler credential
+  that can actually read the zones — not more hand-built SQL.
+
+**Understand what the third hostname actually opens.** Routing points a domain at a Worker, not
+at a path — so `code.tungjp.store` also answers `POST /api/*`, with no Access in front of it, on
+the same Worker as the mailbox. What stops that is the Worker itself: `src/auth.ts` verifies the
+Access JWT's signature, issuer, audience and expiry on every `/api/*` call, and a request that
+arrives through an ungated hostname simply has no assertion to present, so it gets
+`401 UNAUTHORIZED` — measured above. `DEV_AUTH_BYPASS` is inert in production and `checkCsrf`
+still rejects any Origin that is neither `APP_ORIGIN` nor the host being asked. If that single
+layer ever stops being enough, the fix is a second small Worker on the public hostname with a
+read-only D1 binding and no API token at all — not an Access exception on a path.
 
 What a link can say: the newest code for its own alias that arrived in the last 30 minutes in
 mail that passed authentication, how old it is, and the address it arrived at. What it can
