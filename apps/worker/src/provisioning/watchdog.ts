@@ -10,6 +10,9 @@ import { verifyDeliveryPath } from "./preflight";
 const empty = (): DriftReport => ({ checked: 0, ok: [], drifted: [], restored: [], failed: [] });
 
 function driftReason(path: Awaited<ReturnType<typeof verifyDeliveryPath>>, workerName: string): string {
+  if (!path.routingRulesSafe) {
+    return "An enabled Email Routing rule may shadow MailVault's catch-all.";
+  }
   if (!path.routing) {
     return "Email Routing is no longer active for this domain — Cloudflare's routing MX records are gone from DNS.";
   }
@@ -21,7 +24,7 @@ function driftReason(path: Awaited<ReturnType<typeof verifyDeliveryPath>>, worke
 
 async function checkOne(db: D1Database, client: CloudflareClient, d: Domain, workerName: string, report: DriftReport): Promise<void> {
   const path = await verifyDeliveryPath(client, d.cloudflareZoneId, workerName);
-  const delivering = path.routing && path.catchAllOurs && path.mx.cloudflareRouting > 0 && path.mx.clearForUs;
+  const delivering = path.routing && path.catchAllOurs && path.routingRulesSafe && path.mx.cloudflareRouting > 0 && path.mx.clearForUs;
   if (delivering && d.zoneStatus === "active" && d.zoneType === "full") {
     await markRoutingVerified(db, d.cloudflareZoneId);
   } else {
@@ -83,8 +86,9 @@ export async function watchDomains(
     try {
       await checkOne(db, client, d, workerName, report);
     } catch (err) {
-      // An unreadable zone is not evidence of drift — leave its state untouched and
-      // say so, rather than downgrading a domain on a transient API failure.
+      // An unreadable zone does not prove drift: keep owner provisioning state,
+      // but clear customer OTP readiness until complete evidence is available.
+      await clearRoutingVerified(db, d.cloudflareZoneId);
       report.failed.push(d.name);
       log.warn("watchdog_check_failed", {
         zoneId: d.cloudflareZoneId,

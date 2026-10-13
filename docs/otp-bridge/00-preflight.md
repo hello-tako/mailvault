@@ -35,7 +35,7 @@ Findings addressed: no existing customer entitlement; old session is not recent 
 | `apps/worker/worker-configuration.d.ts` | canonical Wrangler-generated binding/runtime declarations |
 | `apps/worker/wrangler.jsonc` | feature OFF default and scoped named service configuration |
 
-Reporting successors add these seven required reports; Portfolio also adds review-only `.github/workflows/otp-bridge.yml` and `scripts/assert-otp-review-build.mjs` for repeatable final-SHA evidence. CI has no production credentials/deploy job. No generated screenshots, real mapping file, credentials or email body are committed.
+Reporting successors add these seven required reports; Portfolio also adds review-only `.github/workflows/otp-bridge.yml` and `scripts/assert-otp-review-build.mjs` for repeatable final-SHA evidence. The Portfolio OTP review workflow has no production credentials or deploy job. MailVault existing deploy is manual-only and skipped on pull requests. No generated screenshots, real mapping file, credentials or email body are committed.
 
 Review supplement: `apps/worker/test/integration/api.test.ts` verifies the actual default Worker fetch/router has no customer HTTP OTP mount even with the OTP flag ON, and production unauthenticated requests remain 401. The native linked harness isolates the reader and uses a fixture HTTP handler; its 404 is transport-only evidence, not the actual router isolation proof.
 
@@ -54,14 +54,18 @@ Reviewed starting HEAD: `d9549512bfeda4332b26d48e68885a0e57093aab`; same branch 
 | Additional changed path | Reason |
 |---|---|
 | `apps/worker/migrations/0021_customer_otp_routing_readiness.sql` | Add dedicated nullable routing-verification timestamp; no unsafe backfill |
+| `apps/worker/src/cf/api-client.ts`, `apps/worker/src/cf/types.ts` | Bounded complete read-only Email Routing rule inventory; no unsafe pagination assumptions |
 | `apps/worker/src/db/domains.ts` | Narrow proof record/clear helpers; discovery cannot refresh proof |
-| `apps/worker/src/provisioning/watchdog.ts` | Record fresh successful delivery-path evidence, clear observed drift |
+| `apps/worker/src/provisioning/watchdog.ts` | Record fresh successful complete delivery-path evidence, clear observed drift/readability loss |
 | `apps/worker/src/provisioning/provisioner.ts` | Record evidence only after successful live routing verification |
-| `apps/worker/src/provisioning/preflight.ts` | Reject explicitly disabled catch-all/routing despite stale ready status |
+| `apps/worker/src/provisioning/preflight.ts` | Reject explicitly disabled catch-all/routing and any ordinary Email Routing rule shadow despite stale ready status |
 | `apps/worker/src/customer-otp/lookup.ts` | Separate alias routing readiness from provider-mail receipt; use dedicated proof in every candidate/final check |
 | `apps/worker/test/integration/customer-otp.test.ts` | Actual D1/R2 cold-alias first-mail, stale/pre-entitlement, dedicated proof and drift regressions |
 | `apps/worker/test/integration/migrations.test.ts` | Actual D1 upgrade preserves READY state but does not turn sync time into proof |
-| `apps/worker/test/unit/preflight.test.ts` | Disabled routing/catch-all safety regressions |
+| `apps/worker/test/unit/preflight.test.ts` | Disabled routing/catch-all and ordinary-rule shadow/shape safety regressions |
+| `apps/worker/test/unit/cf-client.test.ts` | Pagination completeness, duplicate/changed metadata and GET-only Cloudflare rule reads |
+| `apps/worker/test/unit/watchdog.test.ts`, `apps/worker/test/unit/provisioner.test.ts` | Rule shadow invalidates readiness and cannot be bypassed by owner catch-all takeover flags |
+| `apps/worker/test/integration/step-up-security.test.ts` | Model complete empty ordinary-rule API inventory in existing takeover authorization regressions |
 | all seven `docs/otp-bridge/00-06` reports | Correct remediation behavior, evidence and operator prerequisites |
 
 Final successor HEAD/cleanliness and CI receipt are recorded externally in the PR receipt/acceptance output to avoid self-referential hashes. This is author remediation, not independent review approval.

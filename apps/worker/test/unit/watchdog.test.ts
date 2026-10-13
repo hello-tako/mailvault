@@ -65,9 +65,10 @@ function stubDb() {
 interface Stub {
   mx?: Array<{ content: string; priority?: number }>;
   routing?: { enabled?: boolean; status?: string };
-  catchAll?: { enabled?: boolean; actions?: Array<{ type: string; value: string[] }> } | null;
+  catchAll?: { enabled?: boolean; actions?: Array<{ type: string; value: string[] }>; matchers?: Array<{ type: string; field?: string; value?: string }> } | null;
   /** Thrown by the settings read — how the DNS fallback path is exercised. */
   routingError?: Error;
+  rules?: Array<{ id?: string; enabled?: boolean; actions?: Array<{ type?: string; value?: string[] }>; matchers?: Array<{ type?: string; field?: string; value?: string }> }>;
 }
 
 function stubClient(stub: Stub) {
@@ -81,11 +82,12 @@ function stubClient(stub: Stub) {
       return stub.routing ?? { enabled: true };
     },
     getEmailRoutingDns: async () => [],
+    listEmailRoutingRules: async () => stub.rules ?? [],
     enableEmailRouting: async () => {
       mutations.push("enableEmailRouting");
     },
     getCatchAll: async () =>
-      stub.catchAll === undefined ? { enabled: true, actions: [{ type: "worker", value: [WORKER] }] } : stub.catchAll,
+      stub.catchAll === undefined ? { enabled: true, actions: [{ type: "worker", value: [WORKER] }], matchers: [{ type: "all" }] } : stub.catchAll,
     setCatchAllWorker: async () => {
       mutations.push("setCatchAllWorker");
     },
@@ -111,7 +113,7 @@ describe("drift watchdog (read-only against Cloudflare)", () => {
   });
 
   it("flags a domain whose catch-all moved to another Worker, and names the destination", async () => {
-    const { client, mutations } = stubClient({ catchAll: { enabled: true, actions: [{ type: "worker", value: ["someone-else"] }] } });
+    const { client, mutations } = stubClient({ catchAll: { enabled: true, actions: [{ type: "worker", value: ["someone-else"] }], matchers: [{ type: "all" }] } });
     const { db, writes } = stubDb();
 
     const report = await watchDomains(db, client, [domain()], WORKER);
@@ -122,6 +124,14 @@ describe("drift watchdog (read-only against Cloudflare)", () => {
     expect(write?.binds).toContain(MailStatus.Conflict);
     expect(write?.binds).toContain(ConflictType.Drift);
     expect(JSON.stringify(write?.binds)).toContain("someone-else");
+  });
+
+  it("flags an enabled ordinary rule that shadows the catch-all", async () => {
+    const { client } = stubClient({ rules: [{ id: "shadow", enabled: true, actions: [{ type: "forward", value: ["owner@example.net"] }], matchers: [{ type: "literal", field: "to", value: "vip@example.com" }] }] });
+    const { db, writes } = stubDb();
+    const report = await watchDomains(db, client, [domain()], WORKER);
+    expect(report.drifted).toEqual(["example.com"]);
+    expect(JSON.stringify(writes)).toContain("enabled Email Routing rule may shadow");
   });
 
   it("flags a domain that lost its routing MX", async () => {
@@ -169,6 +179,8 @@ describe("drift watchdog (read-only against Cloudflare)", () => {
 
     expect(report.failed).toEqual(["example.com"]);
     expect(report.drifted).toEqual([]);
-    expect(writes).toEqual([]);
+    expect(statusWrites(writes)).toEqual([]);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.sql).toContain("routing_verified_at = NULL");
   });
 });

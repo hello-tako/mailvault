@@ -8,7 +8,7 @@ import { assessAuth } from "../../src/mail/auth";
 import { extractOtp } from "../../src/mail/otp";
 import { getDomainByZoneId, upsertDiscoveredZones } from "../../src/db/domains";
 import { watchDomains } from "../../src/provisioning/watchdog";
-import type { CloudflareClient } from "../../src/cf/api-client";
+import { createCloudflareClient, type CloudflareClient } from "../../src/cf/api-client";
 
 const policy: ProviderPolicy = { providerKey: "synthetic", enabled: true, headerFrom: ["login@example.test"], dkimDomains: ["example.test"],
   loginSubject: /^Your sign-in code$/, loginBody: /^Use this code to sign in \d{6}(?:\n|$)/,
@@ -170,7 +170,8 @@ describe("routing readiness separated from provider messages on real D1", () => 
     let mutations = 0;
     const client = { listDnsRecords: async () => [{ content: "route1.mx.cloudflare.net", priority: 30 }],
       getEmailRoutingStatus: async () => ({ enabled: true }),
-      getCatchAll: async () => ({ enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }] }),
+      listEmailRoutingRules: async () => [],
+      getCatchAll: async () => ({ enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "all" }] }),
       enableEmailRouting: async () => { mutations++; }, setCatchAllWorker: async () => { mutations++; } } as unknown as CloudflareClient;
     const report = await watchDomains(bindings.db, client, [domain!], "mail-vault");
     expect(report.ok).toEqual(["recipient.test"]);
@@ -182,11 +183,58 @@ describe("routing readiness separated from provider messages on real D1", () => 
     const domain = await getDomainByZoneId(bindings.db, "otp-zone");
     const client = { listDnsRecords: async () => failure === "no-mx" ? [] : [{ content: failure === "foreign-mx" ? "aspmx.l.google.com" : "route1.mx.cloudflare.net", priority: 30 }],
       getEmailRoutingStatus: async () => ({ enabled: failure !== "disabled-routing", status: "ready" }),
-      getCatchAll: async () => ({ enabled: failure !== "disabled-catch-all", actions: [{ type: "worker", value: [failure === "wrong-worker" ? "other-worker" : "mail-vault"] }] }),
+      listEmailRoutingRules: async () => [],
+      getCatchAll: async () => ({ enabled: failure !== "disabled-catch-all", actions: [{ type: "worker", value: [failure === "wrong-worker" ? "other-worker" : "mail-vault"] }], matchers: [{ type: "all" }] }),
     } as unknown as CloudflareClient;
     await watchDomains(bindings.db, client, [domain!], "mail-vault");
     const row = await bindings.db.prepare("SELECT routing_verified_at FROM domains WHERE id='otp-domain'").first<{ routing_verified_at: string | null }>();
     expect(row?.routing_verified_at).toBe(null);
+    expect((await validateAlias(bindings.env, await signed("validateAlias"), policy, Date.now())).state).toBe("routing_unknown");
+  });
+});
+
+describe("complete ordinary-rule routing proof on real D1", () => {
+  it("rejects a specific alias shadow on the second API page despite a healthy catch-all", async () => {
+    const domain = await getDomainByZoneId(bindings.db, "otp-zone");
+    const requestedPages: number[] = [];
+    const client = createCloudflareClient({ token: "synthetic-only-token", fetch: (async (input, init) => {
+      expect(init?.method).toBe("GET");
+      const url = new URL(String(input));
+      let result: unknown;
+      let result_info: unknown;
+      if (url.pathname.endsWith("/dns_records")) result = [{ content: "route1.mx.cloudflare.net", priority: 30 }];
+      else if (url.pathname.endsWith("/email/routing")) result = { enabled: true };
+      else if (url.pathname.endsWith("/rules/catch_all")) result = { enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "all" }] };
+      else if (url.pathname.endsWith("/rules")) {
+        const page = Number(url.searchParams.get("page"));
+        requestedPages.push(page);
+        result = page === 1 ? Array.from({ length: 50 }, (_, index) => ({ id: `rule-${index}`, enabled: true,
+          actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "literal", field: "to", value: "safe@recipient.test" }] }))
+          : [{ id: "shadow-rule", enabled: true, actions: [{ type: "forward", value: ["elsewhere@example.test"] }], matchers: [{ type: "literal", field: "to", value: "a@recipient.test" }] }];
+        result_info = { page, per_page: 50, count: page === 1 ? 50 : 1, total_count: 51, total_pages: 2 };
+      }
+      return Response.json({ success: true, result, result_info });
+    }) as typeof fetch });
+    const report = await watchDomains(bindings.db, client, [domain!], "mail-vault");
+    expect(report.drifted).toEqual(["recipient.test"]);
+    expect(requestedPages).toEqual([1, 2]);
+    expect(await bindings.db.prepare("SELECT routing_verified_at FROM domains WHERE id='otp-domain'").first("routing_verified_at")).toBe(null);
+    expect((await validateAlias(bindings.env, await signed("validateAlias"), policy, Date.now())).state).toBe("routing_unknown");
+  });
+
+  it("invalidates old readiness immediately when complete ordinary-rule evidence is unavailable", async () => {
+    const domain = await getDomainByZoneId(bindings.db, "otp-zone");
+    const client = createCloudflareClient({ token: "synthetic-only-token", fetch: (async (input) => {
+      const url = new URL(String(input));
+      const result = url.pathname.endsWith("/dns_records") ? [{ content: "route1.mx.cloudflare.net", priority: 30 }]
+        : url.pathname.endsWith("/email/routing") ? { enabled: true }
+          : url.pathname.endsWith("/rules/catch_all") ? { enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "all" }] }
+            : [];
+      return Response.json({ success: true, result });
+    }) as typeof fetch });
+    const report = await watchDomains(bindings.db, client, [domain!], "mail-vault");
+    expect(report.failed).toEqual(["recipient.test"]);
+    expect(await bindings.db.prepare("SELECT routing_verified_at FROM domains WHERE id='otp-domain'").first("routing_verified_at")).toBe(null);
     expect((await validateAlias(bindings.env, await signed("validateAlias"), policy, Date.now())).state).toBe("routing_unknown");
   });
 });

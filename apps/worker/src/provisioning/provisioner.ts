@@ -165,6 +165,17 @@ export async function provisionDomain(
       PreflightClassification.AlreadyConfigured,
     ]).has(pf.classification);
     const livePath = hasLivePath ? await verifyDeliveryPath(client, zoneId, workerName) : null;
+    if (livePath && !livePath.routingRulesSafe) {
+      await clearRoutingVerified(db, zoneId);
+      await patchDomainProvisioning(db, zoneId, {
+        mailStatus: MailStatus.Conflict,
+        conflictType: ConflictType.CatchAll,
+        conflictDetails: { type: ConflictType.CatchAll, message: "An enabled Email Routing rule may shadow MailVault's catch-all." },
+      });
+      await recordProvisioningEvent(db, domain.id, "provision:routing_rule_conflict", "BLOCKED");
+      return outcome(zoneId, domain.name, domain.id, MailStatus.Conflict, false,
+        "An enabled Email Routing rule may shadow MailVault's catch-all", steps);
+    }
     const liveMxConflict = (livePath?.mx.foreign.length ?? 0) > 0;
     const liveCatchAllConflict = livePath?.foreignCatchAll ?? false;
     const classification = livePath
@@ -345,7 +356,7 @@ export async function provisionDomain(
     // verify (section 33) — do not claim READY off a single 200. Re-read the whole
     // delivery path with the same judgement the watchdog uses.
     const verified = await verifyDeliveryPath(client, zoneId, workerName);
-    const routingOk = verified.routing && verified.mx.cloudflareRouting > 0 && verified.mx.clearForUs;
+    const routingOk = verified.routing && verified.routingRulesSafe && verified.mx.cloudflareRouting > 0 && verified.mx.clearForUs;
     const catchAllOk = verified.catchAllOurs;
     steps.push({
       step: "verify",
