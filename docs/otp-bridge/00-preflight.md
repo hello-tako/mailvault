@@ -1,8 +1,8 @@
 # TUNG OTP BRIDGE V1: preflight
 
 Repository ID: `1409350639`; canonical `takovn2/mailvault`.
-Main base SHA: `9865506ba44bceb9747a1c4f5343a8467f43c120`. Implementation HEAD SHA: `f8af0fb0b801e79479b4102bd48cfd4ce300aaa6`.
-Branch: `codex/otp-bridge-v1`; code worktree clean after implementation commit. Reports and CI are documented successors; final review HEAD, PR URL and CI run URLs are recorded in the PR receipt/final agent output (avoids a self-referential commit hash inside its own tree).
+Main base SHA: `9865506ba44bceb9747a1c4f5343a8467f43c120`. Implementation HEAD SHA: remediation successor recorded in final PR receipt (the prior reviewed HEAD was `d9549512bfeda4332b26d48e68885a0e57093aab`).
+Branch: `codex/otp-bridge-v1`; final successor HEAD, worktree cleanliness, PR URL and CI run URLs are recorded in the PR receipt/final acceptance output (avoids a self-referential commit hash inside its own tree).
 Author review only; independent reviewer not assigned/approved. Flags OFF; production mutations NONE.
 
 ## Verified preflight (P0)
@@ -19,13 +19,13 @@ Findings addressed: no existing customer entitlement; old session is not recent 
 
 | File | Why |
 |---|---|
-| `apps/worker/migrations/0020_customer_otp_rpc_nonces.sql` | additive immutable grant/nonce schema and lifecycle fences |
-| `apps/worker/src/customer-otp/auth.ts` | reuse existing identity/session flow for same-session step-up |
-| `apps/worker/src/customer-otp/classify.ts` | scoped implementation and boundary validation |
-| `apps/worker/src/customer-otp/contracts.ts` | scoped implementation and boundary validation |
-| `apps/worker/src/customer-otp/entrypoint.ts` | scoped implementation and boundary validation |
-| `apps/worker/src/customer-otp/lookup.ts` | scoped implementation and boundary validation |
-| `apps/worker/src/customer-otp/providers.ts` | scoped implementation and boundary validation |
+| `apps/worker/migrations/0020_customer_otp_rpc_nonces.sql` | add globally unique nonce reservation and bounded expiry index; no mail payload |
+| `apps/worker/src/customer-otp/auth.ts` | verify default-OFF gate, versioned HMAC, bounded timestamps and D1 one-use nonce |
+| `apps/worker/src/customer-otp/classify.ts` | require exact approved sender, verified aligned DKIM and login-only extraction corroboration |
+| `apps/worker/src/customer-otp/contracts.ts` | strict versioned input/output schemas and canonical signed fields |
+| `apps/worker/src/customer-otp/entrypoint.ts` | private named WorkerEntrypoint with only two application RPC methods and safe error states |
+| `apps/worker/src/customer-otp/lookup.ts` | exact alias/window/visible D1 selection, bounded private R2 classification and final race fences |
+| `apps/worker/src/customer-otp/providers.ts` | code-owned provider policy; real provider remains disabled with empty sender/signer allowlists |
 | `apps/worker/src/env.ts` | optional secret NAME and typed boundary; no provisioned value |
 | `apps/worker/src/index.ts` | additional private named export; existing event handlers preserved |
 | `apps/worker/test/compat/worker-entrypoint-node.ts` | synthetic security/concurrency/regression/runtime validation |
@@ -46,3 +46,22 @@ PR receipts: MailVault https://github.com/takovn2/mailvault/pull/13 and Portfoli
 The exact file manifest is [00-preflight.md](00-preflight.md); RPC/auth decisions are [01-architecture-contract.md](01-architecture-contract.md), schema/state details are reports 02/03, commands/counts/security negatives and CI receipts are [04-security-test-matrix.md](04-security-test-matrix.md), remaining runtime prerequisites are [05-staging-certification.md](05-staging-certification.md), and operator-only recovery is [06-release-and-rollback.md](06-release-and-rollback.md). These references apply to this deliverable.
 
 PRs: [MailVault #13](https://github.com/takovn2/mailvault/pull/13), [Portfolio #1](https://github.com/takovn2/tungjpstore-portfolio/pull/1). Independent reviewer: unassigned, not approved; drafts await separate P5 review. Initial exact-head CI: [MailVault](https://github.com/takovn2/mailvault/actions/runs/38433814625), [Portfolio](https://github.com/takovn2/tungjpstore-portfolio/actions/runs/38434002462). Final head receipts are attached to the PRs; flags OFF and production mutations NONE.
+
+## Independent-review remediation preflight (2026-10-14)
+
+Reviewed starting HEAD: `d9549512bfeda4332b26d48e68885a0e57093aab`; same branch and canonical ID, previously clean. F-03 audit found `domains.last_checked_at` is also written by discovery sync (`src/db/domains.ts`), so it cannot serve as a dedicated routing proof when provider receipts are separated from readiness. New append-only migration 0021 leaves historical proof NULL. Existing watchdog/provisioner verification records dedicated evidence; no Cloudflare mutation was performed during this work.
+
+| Additional changed path | Reason |
+|---|---|
+| `apps/worker/migrations/0021_customer_otp_routing_readiness.sql` | Add dedicated nullable routing-verification timestamp; no unsafe backfill |
+| `apps/worker/src/db/domains.ts` | Narrow proof record/clear helpers; discovery cannot refresh proof |
+| `apps/worker/src/provisioning/watchdog.ts` | Record fresh successful delivery-path evidence, clear observed drift |
+| `apps/worker/src/provisioning/provisioner.ts` | Record evidence only after successful live routing verification |
+| `apps/worker/src/provisioning/preflight.ts` | Reject explicitly disabled catch-all/routing despite stale ready status |
+| `apps/worker/src/customer-otp/lookup.ts` | Separate alias routing readiness from provider-mail receipt; use dedicated proof in every candidate/final check |
+| `apps/worker/test/integration/customer-otp.test.ts` | Actual D1/R2 cold-alias first-mail, stale/pre-entitlement, dedicated proof and drift regressions |
+| `apps/worker/test/integration/migrations.test.ts` | Actual D1 upgrade preserves READY state but does not turn sync time into proof |
+| `apps/worker/test/unit/preflight.test.ts` | Disabled routing/catch-all safety regressions |
+| all seven `docs/otp-bridge/00-06` reports | Correct remediation behavior, evidence and operator prerequisites |
+
+Final successor HEAD/cleanliness and CI receipt are recorded externally in the PR receipt/acceptance output to avoid self-referential hashes. This is author remediation, not independent review approval.

@@ -56,7 +56,7 @@ export async function verifyDeliveryPath(
   const mx = assessMx(mxRecords);
   let routing: boolean;
   if (routingRes.ok) {
-    routing = routingRes.value.enabled === true || /ready/i.test(routingRes.value.status ?? "");
+    routing = routingRes.value.enabled === true || (routingRes.value.enabled !== false && /ready/i.test(routingRes.value.status ?? ""));
   } else if (isDenied(routingRes.err)) {
     // Re-measured after widening the token's Zone Resources: `POST .../enable` then
     // works, but this settings read still 403s — no API-token permission covers it.
@@ -68,7 +68,7 @@ export async function verifyDeliveryPath(
     throw routingRes.err;
   }
   const ca = catchAll?.actions?.[0];
-  const catchAllOurs = !!ca && ca.type === "worker" && ca.value?.[0] === workerName;
+  const catchAllOurs = !!ca && catchAll?.enabled !== false && ca.type === "worker" && ca.value?.[0] === workerName;
   const foreignCatchAll = !!catchAll && catchAll.enabled !== false && !!ca && !catchAllOurs && ca.type !== "drop";
   return {
     routing,

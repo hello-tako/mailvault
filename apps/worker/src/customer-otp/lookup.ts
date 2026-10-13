@@ -4,17 +4,17 @@ import { classifyLoginCode, normalizeMailbox, trustedSender } from "./classify";
 import type { AliasValidation, LoginOtpResult, OtpRpcRequestV1 } from "./contracts";
 import type { ProviderPolicy } from "./providers";
 
-interface AliasRow { id: string; address: string; status: string; mail_status: string; routing_status: string; catch_all_status: string; last_checked_at: string | null }
+interface AliasRow { id: string; address: string; status: string; zone_status: string; zone_type: string; mail_status: string; routing_status: string; catch_all_status: string; routing_verified_at: string | null }
 interface Candidate { id: string; alias_id: string; envelope_to: string; header_from: string | null; subject: string | null; auth_json: string | null; extracted_codes_json: string | null; parsed_r2_key: string | null; received_at: string }
 
 async function activeAlias(env: Env, aliasId: string, now: number): Promise<AliasRow | null> {
-  const row = await env.DB.prepare(`SELECT a.id, a.address, a.status, d.mail_status,
-    d.routing_status, d.catch_all_status, d.last_checked_at FROM aliases a
+  const row = await env.DB.prepare(`SELECT a.id, a.address, a.status, d.zone_status, d.zone_type, d.mail_status,
+    d.routing_status, d.catch_all_status, d.routing_verified_at FROM aliases a
     JOIN domains d ON d.id = a.domain_id WHERE a.id = ? LIMIT 1`).bind(aliasId).first<AliasRow>();
-  if (!row || row.status !== "ACTIVE" || row.mail_status !== "READY" ||
+  if (!row || row.status !== "ACTIVE" || row.zone_status !== "active" || row.zone_type !== "full" || row.mail_status !== "READY" ||
     row.routing_status !== "READY" || row.catch_all_status !== "OURS" ||
-    !row.last_checked_at || !Number.isFinite(Date.parse(row.last_checked_at)) ||
-    now - Date.parse(row.last_checked_at) > 2 * 60 * 60_000 || Date.parse(row.last_checked_at) > now) return null;
+    !row.routing_verified_at || !Number.isFinite(Date.parse(row.routing_verified_at)) ||
+    now - Date.parse(row.routing_verified_at) > 2 * 60 * 60_000 || Date.parse(row.routing_verified_at) > now) return null;
   return row;
 }
 
@@ -24,17 +24,18 @@ export async function validateAlias(env: Env, request: OtpRpcRequestV1, policy: 
   if (!alias) return { ...result, state: "not_found" };
   if (alias.status !== "ACTIVE") return { ...result, state: "inactive" };
   if (!policy || !(await activeAlias(env, request.aliasId, now))) return { ...result, state: "routing_unknown" };
-  // Read-only receipt proof, specific to this alias and approved sender. Domain DNS alone is insufficient.
-  const rows = await candidates(env, request.aliasId, new Date(now - 24 * 60 * 60_000).toISOString(), now, policy.maxMessages);
-  return { ...result, state: rows.some((row) => trustedSender(row.header_from, row.auth_json, policy)) ? "active" : "routing_unknown" };
+  // Routing readiness is a non-secret delivery-path proof. Provider-message trust is
+  // evaluated only when a code is requested, so a cold alias can receive its first
+  // post-entitlement login message without requiring a prior 24-hour receipt.
+  return { ...result, state: "active" };
 }
 
 async function candidates(env: Env, aliasId: string, since: string, now: number, limit: number): Promise<Candidate[]> {
   const rows = await env.DB.prepare(`SELECT m.id, m.alias_id, m.envelope_to, m.header_from,
     m.subject, m.auth_json, m.extracted_codes_json, m.parsed_r2_key, m.received_at
     FROM messages m JOIN aliases alias ON alias.id = m.alias_id JOIN domains domain ON domain.id = alias.domain_id
-    WHERE alias.status = 'ACTIVE' AND domain.mail_status = 'READY' AND domain.routing_status = 'READY' AND domain.catch_all_status = 'OURS'
-    AND domain.last_checked_at >= ? AND domain.last_checked_at <= ?
+    WHERE alias.status = 'ACTIVE' AND domain.zone_status = 'active' AND domain.zone_type = 'full' AND domain.mail_status = 'READY' AND domain.routing_status = 'READY' AND domain.catch_all_status = 'OURS'
+    AND domain.routing_verified_at >= ? AND domain.routing_verified_at <= ?
     AND m.alias_id = ? AND m.direction = 'IN'
     AND m.ingest_status = 'COMMITTED' AND m.auth_verdict = 'TRUSTED'
     AND m.received_at >= ? AND m.received_at <= ? AND ${visibleMessageSql()}

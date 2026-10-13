@@ -9,7 +9,7 @@ import {
 import type { CloudflareClient } from "../cf/api-client";
 import { CloudflareApiError } from "../cf/api-client";
 import { forbidden } from "../lib/errors";
-import { getDomainByZoneId, patchDomainProvisioning, recordProvisioningEvent } from "../db/domains";
+import { clearRoutingVerified, getDomainByZoneId, markRoutingVerified, patchDomainProvisioning, recordProvisioningEvent } from "../db/domains";
 import { log } from "../lib/logging";
 import { mapWithConcurrency, newId } from "../lib/util";
 import { preflightZone, verifyDeliveryPath } from "./preflight";
@@ -345,7 +345,7 @@ export async function provisionDomain(
     // verify (section 33) — do not claim READY off a single 200. Re-read the whole
     // delivery path with the same judgement the watchdog uses.
     const verified = await verifyDeliveryPath(client, zoneId, workerName);
-    const routingOk = verified.routing;
+    const routingOk = verified.routing && verified.mx.cloudflareRouting > 0 && verified.mx.clearForUs;
     const catchAllOk = verified.catchAllOurs;
     steps.push({
       step: "verify",
@@ -357,6 +357,7 @@ export async function provisionDomain(
     const catchAllStatus = catchAllOk ? CatchAllStatus.Ours : CatchAllStatus.Foreign;
 
     if (routingOk && catchAllOk) {
+      await markRoutingVerified(db, zoneId);
       await patchDomainProvisioning(db, zoneId, {
         mailStatus: MailStatus.Ready,
         routingStatus,
@@ -369,6 +370,7 @@ export async function provisionDomain(
       return outcome(zoneId, domain.name, domain.id, MailStatus.Ready, true, null, steps);
     }
 
+    await clearRoutingVerified(db, zoneId);
     await patchDomainProvisioning(db, zoneId, {
       mailStatus: MailStatus.Failed,
       routingStatus,

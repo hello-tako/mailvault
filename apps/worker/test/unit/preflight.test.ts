@@ -81,6 +81,28 @@ describe("domain preflight safety (section 7)", () => {
     expect(mutations).toEqual([]);
   });
 
+  it("does not treat explicitly disabled Email Routing with a stale ready status as active", async () => {
+    const { client, mutations } = stubClient({
+      mx: [{ content: "route1.mx.cloudflare.net", priority: 30 }],
+      routing: { enabled: false, status: "ready" },
+      catchAll: { enabled: true, actions: [{ type: "worker", value: [WORKER] }] },
+    });
+    const r = await preflightZone(client, zone, WORKER);
+    expect(r.classification).toBe(PreflightClassification.ReadyToProvision);
+    expect(mutations).toEqual([]);
+  });
+
+  it("does not treat a disabled MailVault catch-all as a working delivery path", async () => {
+    const { client, mutations } = stubClient({
+      mx: [{ content: "route1.mx.cloudflare.net", priority: 30 }],
+      routing: { enabled: true },
+      catchAll: { enabled: false, actions: [{ type: "worker", value: [WORKER] }] },
+    });
+    const r = await preflightZone(client, zone, WORKER);
+    expect(r.classification).toBe(PreflightClassification.ReadyToProvision);
+    expect(mutations).toEqual([]);
+  });
+
   it("gates an inactive zone before any API call", async () => {
     const { client } = stubClient({});
     const r = await preflightZone(client, { ...zone, status: "pending" }, WORKER);

@@ -2,7 +2,7 @@ import type { Domain, DriftReport } from "@mailvault/shared";
 import { CatchAllStatus, ConflictType, MailStatus, RoutingStatus } from "@mailvault/shared";
 import type { CloudflareClient } from "../cf/api-client";
 import { CloudflareApiError } from "../cf/api-client";
-import { listDomains, patchDomainProvisioning, recordProvisioningEvent } from "../db/domains";
+import { clearRoutingVerified, listDomains, markRoutingVerified, patchDomainProvisioning, recordProvisioningEvent } from "../db/domains";
 import { log } from "../lib/logging";
 import { mapWithConcurrency } from "../lib/util";
 import { verifyDeliveryPath } from "./preflight";
@@ -21,7 +21,12 @@ function driftReason(path: Awaited<ReturnType<typeof verifyDeliveryPath>>, worke
 
 async function checkOne(db: D1Database, client: CloudflareClient, d: Domain, workerName: string, report: DriftReport): Promise<void> {
   const path = await verifyDeliveryPath(client, d.cloudflareZoneId, workerName);
-  const delivering = path.routing && path.catchAllOurs;
+  const delivering = path.routing && path.catchAllOurs && path.mx.cloudflareRouting > 0 && path.mx.clearForUs;
+  if (delivering && d.zoneStatus === "active" && d.zoneType === "full") {
+    await markRoutingVerified(db, d.cloudflareZoneId);
+  } else {
+    await clearRoutingVerified(db, d.cloudflareZoneId);
+  }
   const wasReady = d.mailStatus === MailStatus.Ready;
 
   if (delivering) {

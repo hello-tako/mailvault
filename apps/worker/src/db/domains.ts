@@ -56,6 +56,33 @@ export async function getDomainById(db: D1Database, id: string): Promise<Domain 
   return row ? toDomain(row) : null;
 }
 
+/** Record a fresh, read-only delivery-path proof for customer OTP readiness. */
+export async function markRoutingVerified(
+  db: D1Database,
+  zoneId: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE domains
+       SET routing_verified_at = ?2, updated_at = ?2
+       WHERE cloudflare_zone_id = ?1`,
+    )
+    .bind(zoneId, nowIso())
+    .run();
+}
+
+/** Clear delivery-path proof immediately when a watchdog check observes drift. */
+export async function clearRoutingVerified(db: D1Database, zoneId: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE domains
+       SET routing_verified_at = NULL, updated_at = ?2
+       WHERE cloudflare_zone_id = ?1`,
+    )
+    .bind(zoneId, nowIso())
+    .run();
+}
+
 /** Owner-controlled enforcement level for unauthenticated senders on this domain. */
 export async function setDomainAuthPolicy(db: D1Database, id: string, policy: AuthPolicy): Promise<number> {
   const res = await db
