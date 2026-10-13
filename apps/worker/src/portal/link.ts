@@ -13,3 +13,17 @@ export function portalOrigin(env: { PORTAL_ORIGIN?: string }, requestOrigin: str
 export function portalPath(token: string): string {
   return `/c/${token}`;
 }
+
+/**
+ * Whether a request arrived on the portal's own hostname, which has exactly one job. Anything
+ * else asked of it is refused rather than answered with the mailbox app: a public domain serving
+ * the owner's UI would be a login-less look-alike of MailVault on a URL nobody intended to publish.
+ */
+export function isPortalHost(env: { PORTAL_ORIGIN?: string }, host: string): boolean {
+  if (!env.PORTAL_ORIGIN) return false;
+  try {
+    return new URL(env.PORTAL_ORIGIN).host === host;
+  } catch {
+    return false;
+  }
+}

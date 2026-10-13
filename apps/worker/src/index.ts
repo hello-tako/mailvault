@@ -11,6 +11,7 @@ import { createCloudflareClient } from "./cf/api-client";
 import { createApp } from "./app";
 import { decorateResponse } from "./security/headers";
 import { stageEmail, commitIngest, type IngestJob } from "./mail/ingest";
+import { isPortalHost } from "./portal/link";
 import { consumeDeliveryEvents } from "./mail/delivery";
 import { deleteKeys } from "./storage/r2";
 import { pushToAll } from "./push";
@@ -35,6 +36,17 @@ export default {
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const portalOnly = isPortalHost(env, url.host);
+    if (portalOnly && !url.pathname.startsWith("/c/")) {
+      return decorateResponse(
+        env,
+        request.url,
+        new Response("Not found", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8", "x-robots-tag": "noindex, nofollow", "cache-control": "no-store" },
+        }),
+      );
+    }
     if (url.pathname === "/api" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/c/")) {
       const res = await app.fetch(request, env, ctx);
       return decorateResponse(env, request.url, res);

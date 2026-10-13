@@ -228,6 +228,29 @@ describe("a link that should not work", () => {
   });
 });
 
+describe("the portal hostname itself", () => {
+  // Built inside the test, not at collection time: `TEST_ENV` is only assigned in `beforeAll`.
+  const portalEnv = (): Env => ({ ...TEST_ENV, PORTAL_ORIGIN: "https://code.example" });
+  const at = (path: string) => worker.fetch(new Request(`https://code.example${path}`), portalEnv(), CTX);
+
+  it("answers nothing but /c/, so the owner's app never appears on a public domain", async () => {
+    const { token } = await mint();
+    expect((await at(`/c/${token}`)).status).toBe(200);
+
+    for (const path of ["/", "/inbox", "/api/health", "/api/messages"]) {
+      const res = await at(path);
+      expect(res.status, path).toBe(404);
+      const body = await res.text();
+      expect(body, path).not.toContain('id="root"');
+      expect(res.headers.get("x-robots-tag"), path).toContain("noindex");
+    }
+  });
+
+  it("leaves the mailbox host alone", async () => {
+    expect((await worker.fetch(req("/api/health"), TEST_ENV, CTX)).status).toBe(200);
+  });
+});
+
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
