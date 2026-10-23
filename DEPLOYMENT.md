@@ -724,3 +724,69 @@ page that never refreshes would hide.
 `wrangler` keeps previous Worker versions. `pnpm --filter @mailvault/worker deploy`
 again with an earlier build, or `wrangler rollback`, restores the previous Worker. D1
 migrations are additive; roll forward with a new migration rather than editing history.
+
+## Backups & disaster recovery
+
+Added 2026-10-24 (audit finding: the mail archive had no recovery layer of any kind).
+Four layers, each answering a different mistake:
+
+| Layer | Covers | Where it lives |
+|-------|--------|----------------|
+| D1 **Time Travel** (PITR) | a bad migration, a wrong UPDATE/DELETE, a corrupted database | inside Cloudflare, ~30 days (paid) / 7 (free) — on by default |
+| Weekly **D1 export** | a deleted database, an account-level mistake, anything older than Time Travel's window | `.github/workflows/backup.yml` → R2 bucket `mail-vault-backups/d1/`, 90-day retention |
+| R2 **Object Versioning** on `mail-vault-storage` | an accidental (or buggy) delete of raw `.eml`/parsed/attachment objects | inside the bucket — old versions survive a delete |
+| Ingest **DLQ** | a commit that keeps failing — the mail is safe in R2, the job is parked | queues `mail-ingest-dlq` and `mail-delivery-events-dlq` |
+
+### The CI credential (one-time)
+
+Both the deploy job in `ci.yml` and the backup workflow need an API token in GitHub
+secrets. Create a **second token** (My Profile → API Tokens), distinct from the Worker's
+runtime secret, with:
+
+- `Workers Scripts:Edit` (deploy)
+- `D1:Edit` (migrations in the deploy job, export + restore in the backup job)
+- `Queues:Edit` (deploy updates consumer config)
+- `R2:Edit`, scoped to the `mail-vault-backups` bucket only (backup writes)
+
+Put it in the repo's `CLOUDFLARE_API_TOKEN` secret (plus `CLOUDFLARE_ACCOUNT_ID`), and
+the deploy job stops being a reminder to run migrations by hand: it applies them, then
+ships exactly what `verify` built. Note the local `wrangler login` OAuth token **cannot**
+manage R2 buckets or read D1 Time Travel on this account (observed 2026-10-24, API error
+10000) — bucket creation in the backup workflow is therefore done by the CI token, not
+by hand from this machine.
+
+### One-time dashboard steps (cannot be done from this repo today)
+
+1. **Enable R2 Object Versioning**: dashboard → R2 → `mail-vault-storage` → Settings →
+   Object Versioning → Enable. (No wrangler command exists for it as of wrangler 4.152,
+   and this account's OAuth login cannot reach the R2 config API.)
+2. **Uptime watch**: point a free external monitor (UptimeRobot, Better Stack) at
+   `https://mail.tungjp.store/api/health`. Everything inside Cloudflare can be green while
+   the Worker is not answering; this is the only check that notices from outside.
+
+### Restore runbooks
+
+- **D1, minutes ago (Time Travel)**: `wrangler d1 time-travel info mail-vault-db --remote`
+  to find the bookmark, then `wrangler d1 time-travel restore mail-vault-db --timestamp
+  <ISO> --remote` (needs the CI token). Fork first (`--fork-name`) if the current state
+  must be kept for inspection.
+- **D1, from the weekly export**: download the newest `d1/mailvault-<date>.sql` from
+  `mail-vault-backups`, create a fresh database, `wrangler d1 execute <new-db> --file
+  mailvault-<date>.sql --remote`, paste its id into `wrangler.jsonc`, deploy.
+- **R2 object, deleted by mistake**: with versioning on, the dashboard's object view lists
+  prior versions; restore from there. Without versioning, the raw `.eml` of recently
+  arrived mail may still exist as a staged object named by its DLQ job.
+- **A dead-lettered ingest job**: the DLQ message carries R2 keys only. Read it from the
+  dashboard (Queues → mail-ingest-dlq), then replay the commit by hand: the staged
+  parsed JSON at `parsed/<messageId>.json` holds everything `commitIngest` needs.
+
+### Failure alerts (how the owner hears about any of this)
+
+The queue consumers record failure streaks (`src/lib/ops-alert.ts`): **3 failures within
+an hour** on either pipeline sends one email to the first `ALLOWED_EMAILS` address, from
+the first active alias of a sending-enabled domain — through this app's own
+`send_email` binding, at most **once per pipeline per day**. The email says which
+pipeline, the streak count, the last error, and points here. If sending itself is not
+configured, the alert degrades to an `ops_alert` metric (`outcome: skipped`) in the
+`mailvault-events` dataset rather than disappearing silently.
+
