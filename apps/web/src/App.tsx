@@ -1,19 +1,26 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, matchRoute, useRoute } from "./lib/router";
 import { connectLive } from "./lib/live";
 import { t, useLang } from "./lib/i18n";
 import { useTheme } from "./lib/theme";
 import { IconAlias, IconGauge, IconGlobe, IconInbox, IconSearch, IconSliders, VaultMark } from "./components/Icons";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
+import { Loading } from "./components/ui";
 import { NewMailToast } from "./components/NewMailToast";
 import { MailboxRail } from "./components/mail/MailboxRail";
 import { Dashboard } from "./pages/Dashboard";
-import { Domains } from "./pages/Domains";
-import { Aliases } from "./pages/Aliases";
-import { AliasDetail } from "./pages/AliasDetail";
 import { Inbox } from "./pages/Inbox";
-import { MessageDetail } from "./pages/MessageDetail";
-import { Settings } from "./pages/Settings";
+
+// Screens beyond the two the app opens on travel in their own chunks: a first visit pays
+// for the dashboard and the inbox, not for the settings page it may never open. The
+// command palette stays eager: it answers ⌘K within the same tick, before any chunk
+// could arrive, and a keystroke racing a lazy load is a palette that ignores its owner.
+const Domains = lazy(() => import("./pages/Domains").then((m) => ({ default: m.Domains })));
+const Aliases = lazy(() => import("./pages/Aliases").then((m) => ({ default: m.Aliases })));
+const AliasDetail = lazy(() => import("./pages/AliasDetail").then((m) => ({ default: m.AliasDetail })));
+const MessageDetail = lazy(() => import("./pages/MessageDetail").then((m) => ({ default: m.MessageDetail })));
+const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 const NAV = [
   { to: "/", key: "nav.dashboard", Icon: IconGauge },
@@ -108,10 +115,22 @@ export function App() {
         {onInbox ? <MailboxRail current={query.get("domain") ?? undefined} /> : null}
       </aside>
       <main className="main">
-        <Route />
+        <ErrorBoundary>
+          <Suspense fallback={<RouteFallback />} >
+            <Route />
+          </Suspense>
+        </ErrorBoundary>
       </main>
       {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
       <NewMailToast />
+    </div>
+  );
+}
+
+function RouteFallback() {
+  return (
+    <div className="page" aria-busy="true">
+      <Loading />
     </div>
   );
 }
