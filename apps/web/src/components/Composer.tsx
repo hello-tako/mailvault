@@ -3,6 +3,7 @@ import { api, type ApiClientError } from "../lib/api";
 import { formatBytes, fullTime } from "../lib/format";
 import { SEND_LIMITS, type MessageDetail, type RecipientSuggestion, type SendOutcome } from "@mailvault/shared";
 import { t } from "../lib/i18n";
+import { clearDraft, draftIsBlank, readDraft, saveDraft } from "../lib/drafts";
 import type { SendableAlias } from "../lib/useOutbox";
 import { Modal } from "./ui";
 
@@ -250,14 +251,28 @@ export function Composer({
   onSent: (outcome: SendOutcome) => void;
 }) {
   const isReply = !!replyTo;
-  const [from, setFrom] = useState(replyTo?.aliasAddress ?? sendableAliases[0]?.address ?? "");
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [subject, setSubject] = useState("");
-  const [text, setText] = useState(() => (replyTo ? quoteOf(replyTo) : ""));
+  // A new compose picks up where the last one left off, on this device only. A reply has
+  // its context in the message it answers, so it never touches the draft slot.
+  const [restoredDraft] = useState(() => (replyTo ? null : readDraft()));
+  const [from, setFrom] = useState(replyTo?.aliasAddress ?? restoredDraft?.from ?? sendableAliases[0]?.address ?? "");
+  const [to, setTo] = useState(restoredDraft?.to ?? "");
+  const [cc, setCc] = useState(restoredDraft?.cc ?? "");
+  const [subject, setSubject] = useState(restoredDraft?.subject ?? "");
+  const [text, setText] = useState(() => (replyTo ? quoteOf(replyTo) : restoredDraft?.text ?? ""));
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Debounced autosave: closing the tab mid-thought must not cost the message. A blank
+  // compose clears the slot instead of storing an empty promise.
+  useEffect(() => {
+    if (isReply) return;
+    const timer = setTimeout(() => {
+      if (draftIsBlank({ from, to, cc, subject, text })) clearDraft();
+      else saveDraft({ from, to, cc, subject, text });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isReply, from, to, cc, subject, text]);
   const body = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -327,6 +342,7 @@ export function Composer({
             text,
             ...(attachments.length > 0 ? { attachments } : {}),
           });
+      if (!isReply) clearDraft();
       onSent(outcome);
     } catch (err) {
       const code = (err as ApiClientError).code ?? "";

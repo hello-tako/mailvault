@@ -72,6 +72,19 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   // the badges follow from the refetch, and everything else stays where it was.
   const { data, error, loading, reload } = useAsync(() => api.listMessages(query), [query], { live: true });
   const { data: counters, reload: reloadCounters } = useAsync(() => api.messageCounters(domainId), [domainId]);
+  // The installed app wears the unread count on its own icon. Where the browser does not
+  // support badges the call is simply absent, and nothing here waits on it.
+  useEffect(() => {
+    if (!counters) return;
+    const nav = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    const op =
+      counters.inbox.unread > 0 ? nav.setAppBadge?.(counters.inbox.unread) : nav.clearAppBadge?.();
+    if (op && typeof op.catch === "function") op.catch(() => undefined);
+  }, [counters]);
+
   const outbox = useOutbox();
   // The rail carries the mailbox list on a wide screen, so the page only asks for the domains
   // its own phone picker is going to draw.
