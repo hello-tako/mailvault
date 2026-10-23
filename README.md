@@ -40,9 +40,15 @@ Workers Static Assets for the SPA, and Cloudflare Access for authentication.
 | Delivery reported per address: a send to three people shows which one bounced, from Email Sending's own queue events | ✅ consumer tested through `worker.queue` |
 | Sends under a name of its own choosing: a domain may send through an onboarded subdomain of the same zone, so the DMARC policy lands where nothing else sends and answers still come back to the alias | ✅ 9 integration tests |
 | Frontend structure: `components/mail/*` for the parts of a mail screen, `lib/*` for the decisions (which tab asks for what, what a selection holds, which aliases may sign), mailboxes in the rail as navigation | ✅ 15 unit + 51 E2E |
-| Unit + integration tests (364 passing: worker 264, web 100) | ✅ Green |
-| Playwright E2E (58 passing across desktop and 412px, live workerd + local D1/R2) | ✅ Green |
+| Unit + integration tests (415 passing: worker 305, web 110) | ✅ Green |
+| Playwright E2E (63 passing across desktop and 412px, live workerd + local D1/R2) | ✅ Green |
 | Deployed + receiving real mail on 32 of 36 owner domains (4 excluded by config) | ✅ Live |
+| Working-list/counter indexes + cursor paging; counters as eight index-counts in one batch | ✅ Migration 0014, plan asserted by test |
+| Ingest commit in one atomic batch; delivery events applied in batches; parallel pushes and attachment writes | ✅ Round trips per message cut, tests green |
+| Split bundle (lazy screens), optimistic read/star, error boundary, PWA unread badge | ✅ First-load JS split from one 406 kB chunk |
+| Download the original `.eml`; export/import the address book as JSON; compose draft autosave | ✅ Integration + unit tests |
+| Failure-streak email alerts (via the app's own `send_email`) + a dead letter for delivery events | ✅ `src/lib/ops-alert.ts`, 9 tests |
+| Backups: weekly D1 export to R2, Time Travel + versioning runbooks; CI applies migrations and auto-deploys on main; nightly production smoke; dependabot | ✅ See `DEPLOYMENT.md`, "Backups & disaster recovery" |
 
 See [`DEPLOYMENT.md`](./DEPLOYMENT.md): the implementation receipt records the state at
 build time (no Cloudflare credentials existed in that environment, so it says
@@ -176,6 +182,9 @@ state-changing methods, the `x-mailvault: 1` header + same-origin (CSRF).
 | GET | `/api/messages/counters` | Totals and unread counts per tab and per mailbox, over the whole mailbox rather than the page |
 | POST | `/api/messages/bulk` | Read / unread / star / unstar / archive / unarchive / delete a selection (up to 200 ids) |
 | GET | `/api/messages/:id` | Detail with sanitized HTML, codes, links, attachments, and per-address delivery state |
+| GET | `/api/messages/:id/raw` | The original message as `message/rfc822` (.eml download) |
+| GET | `/api/aliases/export` | The address book as a JSON attachment |
+| POST | `/api/aliases/import` | Add back what an export wrote (additive; reports created/skipped/refused) |
 | PATCH | `/api/messages/:id/read` | Set read flag |
 | POST | `/api/outbox` | Compose a new message from one of your active aliases, with up to 8 files (5 MiB for the whole message) |
 | GET | `/api/outbox/capabilities` | Which domains may sign mail, and today's remaining budget |
