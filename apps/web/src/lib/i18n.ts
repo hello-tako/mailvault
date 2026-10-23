@@ -140,7 +140,8 @@ export const en: Dict = {
   "msg.delete": "Delete",
   "msg.deleteTitle": "Delete message",
   "msg.deleteConfirm": "Delete permanently",
-  "msg.deleteBody": "This permanently deletes the message and any stored attachments. This cannot be undone.",
+  "msg.deleteBody":
+    "The message is hidden immediately; stored content is permanently removed by a retried cleanup job. This cannot be undone.",
   "msg.degraded":
     "This message could not be fully parsed. The original is preserved and the readable parts are shown below.",
   "msg.numericCode": "Numeric code",
@@ -160,13 +161,16 @@ export const en: Dict = {
   "msg.authNoVouch": "— none of it vouches for the sender domain",
   "msg.authTrusted": "Sender authenticated",
   "msg.authUnverified": "Sender not verified",
+  "msg.authAssessmentUnavailable": "No trustworthy assessment is stored for this older message.",
+  "msg.authSourceUntrusted":
+    "Authentication results are part of the sender-controlled message headers. Cloudflare's Worker API provides no separate verified sender verdict, so these results do not establish who sent this message.",
   "msg.authSpoofed": "Unauthenticated sender — treat this message as an attempt to impersonate.",
   "msg.authWhy": "Why: {reasons}",
   "msg.filedAuto": "Filed automatically — {note}.",
   "msg.reviewRules": "Review rules",
-  "msg.secretsHidden": "Codes and verification links are hidden.",
+  "msg.secretsHidden": "Unverified message content is hidden.",
   "msg.secretsHiddenBody":
-    " A message that fails sender authentication can be forged by anyone who learns an alias address, so nothing here is presented as a code or a link until you choose to look.",
+    " This sender has not been authenticated. Anyone who knows an alias address could forge the message, so its body, codes, links and attachments stay hidden until you choose to look.",
   "msg.showAnyway": "Show anyway ({n})",
   "msg.codes": "Codes",
   "msg.links": "Verification links",
@@ -260,18 +264,21 @@ export const en: Dict = {
   "dom.mxTakeover": "Delete the current provider's MX on {n} domain(s)",
   "dom.mxNote": "Cloudflare's routing MX replaces these, and unrouted mail arrives at MailVault.",
   "dom.caTakeover": "Take over the existing foreign catch-all rule",
-  "dom.caWarn": "This replaces another service's catch-all destination. Unrouted mail there stops arriving.",
+  "dom.caWarn":
+    "This replaces another service's catch-all destination. Unrouted mail there stops arriving.",
   "dom.enabling": "Enabling…",
   "dom.enableMail": "Enable mail",
   "dom.retryTitle": "Retry with catch-all takeover",
   "dom.retryBodyA": "has a foreign catch-all. Replace it so MailVault receives unrouted mail?",
-  "dom.retryWarn": "This overwrites the current catch-all destination. MX records are still never modified.",
+  "dom.retryWarn":
+    "This overwrites the current catch-all destination. MX records are still never modified.",
   "dom.retryConfirm": "Take over catch-all",
   "dom.removeTitle": "Remove from MailVault",
   "dom.removeConfirm": "Remove domain",
   "dom.removeBodyA": "Remove",
   "dom.removeBodyB": "from MailVault?",
-  "dom.removeNoteA": "This only forgets the domain here. Your Cloudflare zone, DNS and Email Routing are",
+  "dom.removeNoteA":
+    "This only forgets the domain here. Your Cloudflare zone, DNS and Email Routing are",
   "dom.removeNoteB": "changed, and no zone is deleted.",
   "dom.removeNot": "not",
   "cls.readyToProvision": "Ready to enable",
@@ -339,7 +346,7 @@ export const en: Dict = {
   "aliases.purgeChoice": "Also permanently delete all existing messages for this alias",
   "aliases.purgeWarning": "This permanently deletes {n} stored message(s). This cannot be undone.",
   "aliases.deleted": "Alias deleted — existing mail kept",
-  "aliases.deletedPurged": "Alias and its messages deleted",
+  "aliases.deletedPurged": "Alias disabled; message cleanup queued",
 
   "portal.title": "Code links",
   "portal.intro": "A link shows this address's newest verified code, then dies. Nothing else in the mailbox can be reached through it.",
@@ -433,7 +440,8 @@ export const en: Dict = {
   "set.appearanceTitle": "Language and appearance",
   "set.langLabel": "Interface language",
   "set.themeTitle": "Light or dark",
-  "set.themeHint": "Follows your device unless you choose here. Nothing about the mail changes, and the choice is not stored anywhere but this device.",
+  "set.themeHint":
+    "It follows your device unless you choose here. Nothing else changes — same mail, same controls, nothing stored about the choice.",
   "set.themeLabel": "Appearance",
   "set.insightsTitle": "Details beside a message",
   "set.insightsHint": "The links a message carries, its authentication evidence, how a send was delivered. The message and any code in it always show.",
@@ -443,7 +451,7 @@ export const en: Dict = {
   "set.themeNow": "Showing",
   "set.notifTitle": "Notifications",
   "set.notifIntro":
-    "The ping carries no content. The app looks the message up through your sign-in and shows sender and subject — verified senders only, never a code or a link; anything else says only \"New mail arrived\".",
+    'The ping your device receives carries no content at all. The app then looks the message up through your sign-in and shows sender and subject — only for a verified sender, never a code or a link, and only mail that just arrived. Anything else stays "New mail arrived".',
   "set.server": "Server",
   "set.pushOn": "Push enabled",
   "set.pushOff": "Not configured (set VAPID_PRIVATE_KEY)",
@@ -463,14 +471,15 @@ export const en: Dict = {
   "set.passTitle": "Passkey check",
   "set.passIntro":
     "Signing in proves which account you are. This proves the same person is holding this device, and it is asked for before anything that cannot be undone: purging an alias's stored mail, detaching a domain, turning sender checks off, or adding another passkey. It lasts a few minutes, then asks again.",
-  "set.passRegistered": "Passkey registered. It will be asked for before mail is purged or a domain is detached.",
+  "set.passRegistered":
+    "Passkey registered. It will be asked for before mail is purged or a domain is detached.",
   "set.passRemoved": "Passkey removed.",
   "set.passWord": "Passkey",
   "set.added": "added {at}",
   "set.lastUsed": "last used {at}",
   "set.neverUsed": "never used",
   "set.passNone":
-    "No passkey registered yet, so irreversible actions currently rely on your sign-in alone.",
+    "No passkey registered yet. Register one to unlock irreversible actions; sign-in alone cannot authorize them.",
   "set.passAddAnother": "Add another passkey",
   "set.passRegister": "Register a passkey",
   "set.passUnsupported": "This browser cannot use passkeys.",
@@ -479,7 +488,7 @@ export const en: Dict = {
   "set.requestFailed": "Request failed",
   "set.semTitle": "Search by meaning",
   "set.semIntro":
-    "Off by default. Turning it on copies a short excerpt of each message — sender, subject and the first few hundred characters — into a vector index in this Cloudflare account, so \"the invoice from the phone shop\" finds mail even when those exact words are not in it. Keyword search keeps working either way. Turning it off deletes those copies.",
+    'Off by default. Turning it on copies a short excerpt of each message — sender, subject and the first few hundred characters — into a vector index in this Cloudflare account, so "the invoice from the phone shop" finds mail even when those exact words are not in it. Keyword search keeps working either way. Turning it off deletes those copies.',
   "set.semOnNew":
     "On. New mail is indexed as it arrives; use Index existing mail for what is already stored.",
   "set.semOff": "Off. {n} stored vector(s) were deleted along with their copies of your text.",
@@ -498,7 +507,7 @@ export const en: Dict = {
     "This deployment has no AI or vector index bound, so the feature cannot be turned on here.",
   "set.installTitle": "Install",
   "set.installBody":
-    "MailVault is installable: use your browser's \"Install app\" (or Share → Add to Home Screen on iOS) to get its own window. It works offline for the screens you already opened; mail and attachments are never cached.",
+    'MailVault is installable: use your browser\'s "Install app" (or Share → Add to Home Screen on iOS) to get its own window. It works offline for the screens you already opened; mail and attachments are never cached.',
 
   "pal.trigger": "Jump to",
   "pal.title": "Search and commands",
@@ -550,9 +559,12 @@ export const en: Dict = {
   "composer.send": "Send",
   "composer.sending": "Sending…",
   "composer.answerTo": "Your answer goes to",
-  "composer.fromRow": "It leaves as {alias}, so the other side never sees another address of yours.",
-  "composer.noAliases": "No alias of yours sits on a domain that can send. Enable sending for a domain, or create an alias on one that already can.",
-  "composer.leavesVia": "It leaves as {sending}, and answers come back to {alias} — the sending records live on that subdomain, so their policy touches nothing else.",
+  "composer.fromRow":
+    "It leaves as {alias}, so the other side never sees another address of yours.",
+  "composer.noAliases":
+    "No alias of yours sits on a domain that can send. Enable sending for a domain, or create an alias on one that already can.",
+  "composer.leavesVia":
+    "It leaves as {sending}, and answers come back to {alias} — the sending records live on that subdomain, so their policy touches nothing else.",
   "composer.unavailable": "Sending is not available on this deployment.",
   "composer.recipients": "{n} recipient(s)",
   "composer.remaining": "{n} messages left today",
@@ -564,21 +576,28 @@ export const en: Dict = {
   "composer.fileTooLarge": "{name} is bigger than {max}, so it was not attached.",
   "composer.tooManyFiles": "One message carries {n} files, so the last ones were not attached.",
 
+  "send.status.PREPARING": "Preparing — not sent yet",
+  "send.status.UNKNOWN": "Acceptance unknown — do not resend",
   "send.status.QUEUED": "Sent, waiting for the other server",
   "send.status.DELIVERED": "Delivered",
   "send.status.BOUNCED": "Bounced",
   "send.status.SUPPRESSED": "Blocked as a previous bounce",
   "send.status.FAILED": "Not sent",
 
-  "send.err.unknownSender": "That address is not one of your active aliases, so nothing can be sent as it.",
-  "send.err.sendingDisabled": "This domain cannot send yet. Turn on Email Sending for it in Domains.",
+  "send.err.unknownSender":
+    "That address is not one of your active aliases, so nothing can be sent as it.",
+  "send.err.sendingDisabled":
+    "This domain cannot send yet. Turn on Email Sending for it in Domains.",
   "send.err.binding": "This server has no sending configured, so mail cannot leave the vault.",
   "send.err.noRecipients": "Add at least one recipient.",
   "send.err.noTarget": "This message has no usable address to answer.",
-  "send.err.noAlias": "This mail no longer has an alias of its own, so there is nothing to answer from. Write a new message instead.",
+  "send.err.noAlias":
+    "This mail no longer has an alias of its own, so there is nothing to answer from. Write a new message instead.",
   "send.err.tooMany": "At most 50 recipients counting To, Cc and Bcc together.",
   "send.err.dailyLimit": "You have reached today's sending limit.",
-  "send.err.spoofedParent": "That message failed sender authentication — answering it would write straight to an impostor.",
+  "send.err.spoofedParent":
+    "That message failed sender authentication — answering it would write straight to an impostor.",
+  "send.err.unverifiedParent": "You can’t reply because this sender has not been authenticated.",
   "send.err.empty": "Write something first.",
   "send.err.tooLarge": "The message is larger than one email may be.",
   "send.err.badAddress": "One of the addresses is not valid.",
@@ -591,23 +610,30 @@ export const en: Dict = {
   "dom.sendingDisabled": "Cannot send",
   "dom.sendingUnknown": "Not checked",
   "dom.sendingVia": "Send mail as",
-  "dom.sendingViaHint": "Choosing a name writes no DNS record — it only decides which sending identity this domain's mail uses. A subdomain carries its own DMARC policy, so the domain itself stays untouched.",
+  "dom.sendingViaHint":
+    "Choosing a name writes no DNS record — it only decides which sending identity this domain's mail uses. A subdomain carries its own DMARC policy, so the domain itself stays untouched.",
   "dom.sendingViaFailed": "The choice could not be saved.",
-  "dom.sendingAlreadyOnVia": "{domain} is already enabled for sending, so mail from this domain can go out now.",
+  "dom.sendingAlreadyOnVia":
+    "{domain} is already enabled for sending, so mail from this domain can go out now.",
   "dom.refreshSending": "Check sending",
   "dom.enableSending": "Enable sending",
   "dom.enableSendingTitle": "Enable sending for {domain}",
-  "dom.enableSendingBody": "Email Sending adds these records for {domain} and signs mail with them:",
-  "dom.enableSendingNote": "Your MX records — where mail arrives — are not touched. A DMARC record for the whole domain will exist afterwards, and it applies to every sender using {domain}, not just this app.",
-  "dom.dmarcConflict": "{domain} already has a DMARC record. Enabling sending changes it, and that policy covers senders this app knows nothing about.",
+  "dom.enableSendingBody":
+    "Email Sending adds these records for {domain} and signs mail with them:",
+  "dom.enableSendingNote":
+    "Your MX records — where mail arrives — are not touched. A DMARC record for the whole domain will exist afterwards, and it applies to every sender using {domain}, not just this app.",
+  "dom.dmarcConflict":
+    "{domain} already has a DMARC record. Enabling sending changes it, and that policy covers senders this app knows nothing about.",
   "dom.dmarcConfirm": "I understand the DMARC policy for {domain} will be created or replaced",
   "dom.sendingAlreadyOn": "Sending is already enabled for this domain.",
   "dom.sendingEnabledDone": "Sending is enabled for {domain}.",
-  "dom.sendingNeedsPermission": "Cloudflare refused the change. The token needs Email Sending: Edit.",
+  "dom.sendingNeedsPermission":
+    "Cloudflare refused the change. The token needs Email Sending: Edit.",
 
   "inbox.groupConversations": "Threads",
   "inbox.groupHint": "One row per conversation, newest message on top",
-  "inbox.groupOffWhileSearching": "A search lists every matching message, not one row per conversation",
+  "inbox.groupOffWhileSearching":
+    "A search lists every matching message, not one row per conversation",
   "inbox.nInThread": "{n} messages in this conversation",
 
   "composer.quotedFrom": "On {when}, {who} wrote",
@@ -618,7 +644,8 @@ export const en: Dict = {
   "msg.unsubscribeLink": "Opens the sender's own unsubscribe page.",
   "msg.unsubscribeGo": "Unsubscribe",
   "msg.unsubscribeMail": "By email instead",
-  "msg.unsubscribeHidden": "This message offers an unsubscribe, but it is not shown because the sender did not pass authentication — answering one of those tells a stranger this address is read.",
+  "msg.unsubscribeHidden":
+    "This message offers an unsubscribe, but it is not shown because the sender did not pass authentication — answering one of those tells a stranger this address is read.",
 
   "inbox.starredTab": "Starred",
   "inbox.selectAllPage": "Select every message on this page",
@@ -641,7 +668,8 @@ export const en: Dict = {
   "bulk.delete": "Delete",
   "bulk.deleteTitle": "Delete {n} messages?",
   "bulk.deleteConfirm": "Delete {n}",
-  "bulk.deleteBody": "The mail and its attachments are removed for good. Nothing else is deleted, and no address is touched.",
+  "bulk.deleteBody":
+    "The mail is hidden immediately and permanent cleanup is queued with retries. No address is touched.",
   "bulk.failed": "That did not go through.",
 
   "search.op.from": "from",
@@ -782,8 +810,10 @@ export const vi: Dict = {
   "msg.delete": "Xoá",
   "msg.deleteTitle": "Xoá thư",
   "msg.deleteConfirm": "Xoá vĩnh viễn",
-  "msg.deleteBody": "Thao tác này xoá vĩnh viễn thư này và mọi tệp đính kèm đã lưu. Không thể hoàn tác.",
-  "msg.degraded": "Không phân tích hết được thư này. Bản gốc vẫn được giữ, và phần đọc được hiển thị bên dưới.",
+  "msg.deleteBody":
+    "Thao tác này xoá vĩnh viễn thư này và mọi tệp đính kèm đã lưu. Không thể hoàn tác.",
+  "msg.degraded":
+    "Không phân tích hết được thư này. Bản gốc vẫn được giữ, và phần đọc được hiển thị bên dưới.",
   "msg.numericCode": "Mã số",
   "msg.code": "Mã",
   "msg.codeLength": "{n} ký tự",
@@ -801,13 +831,17 @@ export const vi: Dict = {
   "msg.authNoVouch": "— không có kết quả nào bảo lãnh cho tên miền người gửi",
   "msg.authTrusted": "Người gửi đã xác minh",
   "msg.authUnverified": "Người gửi chưa xác minh",
+  "msg.authAssessmentUnavailable":
+    "Không có đánh giá xác thực đáng tin cậy được lưu cho thư cũ này.",
+  "msg.authSourceUntrusted":
+    "Kết quả xác thực nằm trong header do người gửi kiểm soát. API Worker của Cloudflare không cung cấp verdict xác thực người gửi riêng, nên các kết quả này không chứng minh ai đã gửi thư.",
   "msg.authSpoofed": "Người gửi không xác minh được — hãy coi thư này là một nỗ lực giả mạo.",
   "msg.authWhy": "Lý do: {reasons}",
   "msg.filedAuto": "Được xếp tự động — {note}.",
   "msg.reviewRules": "Xem lại quy tắc",
-  "msg.secretsHidden": "Mã và liên kết xác minh đang bị ẩn.",
+  "msg.secretsHidden": "Nội dung thư chưa được xác thực đang bị ẩn.",
   "msg.secretsHiddenBody":
-    " Thư không qua được xác minh người gửi có thể bị giả mạo bởi bất kỳ ai biết địa chỉ bí danh, nên không có gì ở đây được hiển thị dưới dạng mã hay liên kết cho tới khi bạn chủ động xem.",
+    " Người gửi này chưa được xác thực. Bất kỳ ai biết địa chỉ bí danh đều có thể giả mạo thư, nên nội dung, mã, liên kết và tệp đính kèm sẽ bị ẩn cho tới khi bạn chủ động xem.",
   "msg.showAnyway": "Vẫn hiển thị ({n})",
   "msg.codes": "Mã",
   "msg.links": "Liên kết xác minh",
@@ -899,20 +933,25 @@ export const vi: Dict = {
   "dom.enableAssureRest":
     " Xoá MX của nhà cung cấp khác sẽ khiến thư của tên miền đó không còn tới hộp thư hiện tại — các bản ghi sẽ bị xoá được liệt kê ngay bên dưới và được ghi vào nhật ký của tên miền trước, nên có thể đặt lại.",
   "dom.mxTakeover": "Xoá MX của nhà cung cấp hiện tại trên {n} tên miền",
-  "dom.mxNote": "MX chuyển tiếp của Cloudflare sẽ thay thế các bản ghi này, và thư không được chuyển sẽ tới MailVault.",
+  "dom.mxNote":
+    "MX chuyển tiếp của Cloudflare sẽ thay thế các bản ghi này, và thư không được chuyển sẽ tới MailVault.",
   "dom.caTakeover": "Tiếp quản quy tắc catch-all đang có",
-  "dom.caWarn": "Thao tác này thay đích đến catch-all của dịch vụ khác. Thư không được chuyển ở đó sẽ không còn tới nơi cũ.",
+  "dom.caWarn":
+    "Thao tác này thay đích đến catch-all của dịch vụ khác. Thư không được chuyển ở đó sẽ không còn tới nơi cũ.",
   "dom.enabling": "Đang bật…",
   "dom.enableMail": "Bật nhận thư",
   "dom.retryTitle": "Thử lại kèm tiếp quản catch-all",
-  "dom.retryBodyA": "đang có một quy tắc catch-all của dịch vụ khác. Thay nó để MailVault nhận thư không được chuyển?",
-  "dom.retryWarn": "Thao tác này ghi đè đích đến catch-all hiện tại. Các bản ghi MX vẫn tuyệt đối không bị sửa.",
+  "dom.retryBodyA":
+    "đang có một quy tắc catch-all của dịch vụ khác. Thay nó để MailVault nhận thư không được chuyển?",
+  "dom.retryWarn":
+    "Thao tác này ghi đè đích đến catch-all hiện tại. Các bản ghi MX vẫn tuyệt đối không bị sửa.",
   "dom.retryConfirm": "Tiếp quản catch-all",
   "dom.removeTitle": "Gỡ khỏi MailVault",
   "dom.removeConfirm": "Gỡ tên miền",
   "dom.removeBodyA": "Gỡ",
   "dom.removeBodyB": "khỏi MailVault?",
-  "dom.removeNoteA": "Thao tác này chỉ quên tên miền ở đây. Zone, DNS và Email Routing của bạn trên Cloudflare",
+  "dom.removeNoteA":
+    "Thao tác này chỉ quên tên miền ở đây. Zone, DNS và Email Routing của bạn trên Cloudflare",
   "dom.removeNoteB": "thay đổi, và không zone nào bị xoá.",
   "dom.removeNot": "không",
   "cls.readyToProvision": "Sẵn sàng bật",
@@ -971,7 +1010,8 @@ export const vi: Dict = {
   "aliases.serviceName": "Tên dịch vụ",
   "aliases.customName": "Phần tên tự đặt",
   "aliases.willCreate": "Sẽ tạo:",
-  "aliases.noReadyDomain": "Chưa có tên miền nào sẵn sàng nhận thư. Hãy bật nhận thư cho một tên miền trước.",
+  "aliases.noReadyDomain":
+    "Chưa có tên miền nào sẵn sàng nhận thư. Hãy bật nhận thư cho một tên miền trước.",
   "aliases.goToDomains": "Tới trang tên miền",
   "aliases.deleteTitle": "Xoá bí danh",
   "aliases.deleteConfirm": "Xoá bí danh",
@@ -980,7 +1020,7 @@ export const vi: Dict = {
   "aliases.purgeChoice": "Đồng thời xoá vĩnh viễn toàn bộ thư đã lưu của bí danh này",
   "aliases.purgeWarning": "Thao tác này xoá vĩnh viễn {n} thư đã lưu. Không thể hoàn tác.",
   "aliases.deleted": "Đã xoá bí danh — thư cũ vẫn được giữ",
-  "aliases.deletedPurged": "Đã xoá bí danh cùng toàn bộ thư",
+  "aliases.deletedPurged": "Đã tắt bí danh; việc xoá thư đã được đưa vào hàng đợi",
 
   "portal.title": "Link nhận mã",
   "portal.intro": "Mỗi link chỉ hiện mã mới nhất đã xác thực của địa chỉ này, rồi tự hết hạn. Không gì khác trong hộp thư mở được qua link.",
@@ -1074,7 +1114,8 @@ export const vi: Dict = {
   "set.appearanceTitle": "Ngôn ngữ và giao diện",
   "set.langLabel": "Ngôn ngữ giao diện",
   "set.themeTitle": "Sáng hay tối",
-  "set.themeHint": "Theo máy của bạn trừ khi bạn chọn ở đây. Không gì khác thay đổi, và lựa chọn chỉ lưu trên máy này.",
+  "set.themeHint":
+    "Mặc định theo máy của bạn, trừ khi bạn chọn ở đây. Không có gì khác thay đổi — vẫn là thư đó, vẫn các nút đó, và không lưu gì về lựa chọn này ra ngoài máy.",
   "set.themeLabel": "Giao diện",
   "set.insightsTitle": "Chi tiết kèm theo thư",
   "set.insightsHint": "Liên kết trong thư, bằng chứng xác thực người gửi, tình trạng giao thư. Nội dung thư và mã luôn hiển thị.",
@@ -1084,7 +1125,7 @@ export const vi: Dict = {
   "set.themeNow": "Đang hiển thị",
   "set.notifTitle": "Thông báo",
   "set.notifIntro":
-    "Tin báo tới thiết bị không chứa nội dung. Ứng dụng tra cứu thư qua phiên đăng nhập của bạn và hiện người gửi cùng chủ đề — chỉ người gửi đã xác minh, không bao giờ là mã hay liên kết; trường hợp khác chỉ ghi \"Thư mới đã tới\".",
+    'Tin nhắn gửi tới thiết bị của bạn hoàn toàn không chứa nội dung. Ứng dụng sẽ tự tra cứu thư qua phiên đăng nhập của bạn và hiển thị người gửi cùng chủ đề — chỉ với người gửi đã xác minh, không bao giờ là mã hay liên kết, và chỉ thư vừa tới. Mọi trường hợp khác vẫn ghi là "Thư mới đã tới".',
   "set.server": "Máy chủ",
   "set.pushOn": "Đã bật push",
   "set.pushOff": "Chưa cấu hình (đặt VAPID_PRIVATE_KEY)",
@@ -1104,14 +1145,15 @@ export const vi: Dict = {
   "set.passTitle": "Kiểm tra passkey",
   "set.passIntro":
     "Đăng nhập chứng minh bạn là tài khoản nào. Passkey chứng minh vẫn là người này đang cầm thiết bị, và được hỏi trước mọi thao tác không hoàn tác được: xoá sạch thư của một bí danh, gỡ tên miền, tắt kiểm tra người gửi, hoặc thêm passkey khác. Phiên này kéo dài vài phút rồi hỏi lại.",
-  "set.passRegistered": "Đã đăng ký passkey. Nó sẽ được yêu cầu trước khi xoá thư hoặc gỡ tên miền.",
+  "set.passRegistered":
+    "Đã đăng ký passkey. Nó sẽ được yêu cầu trước khi xoá thư hoặc gỡ tên miền.",
   "set.passRemoved": "Đã xoá passkey.",
   "set.passWord": "Passkey",
   "set.added": "thêm {at}",
   "set.lastUsed": "dùng gần nhất {at}",
   "set.neverUsed": "chưa dùng",
   "set.passNone":
-    "Chưa có passkey nào, nên các thao tác không hoàn tác được hiện chỉ dựa vào phiên đăng nhập của bạn.",
+    "Chưa có passkey nào. Hãy đăng ký để mở khóa thao tác không hoàn tác được; chỉ đăng nhập không đủ để cho phép chúng.",
   "set.passAddAnother": "Thêm passkey khác",
   "set.passRegister": "Đăng ký passkey",
   "set.passUnsupported": "Trình duyệt này không dùng được passkey.",
@@ -1120,8 +1162,9 @@ export const vi: Dict = {
   "set.requestFailed": "Yêu cầu thất bại",
   "set.semTitle": "Tìm theo ý nghĩa",
   "set.semIntro":
-    "Mặc định tắt. Bật lên sẽ sao một đoạn ngắn của mỗi thư — người gửi, chủ đề và vài trăm ký tự đầu — vào một chỉ mục vector trong tài khoản Cloudflare này, để \"hoá đơn của cửa hàng điện thoại\" vẫn tìm ra thư dù những chữ đó không xuất hiện. Tìm theo từ khoá vẫn hoạt động cả hai cách. Tắt đi sẽ xoá các bản sao đó.",
-  "set.semOnNew": "Đã bật. Thư mới được lập chỉ mục khi tới; hãy dùng \"Lập chỉ mục thư cũ\" cho thư đã lưu.",
+    'Mặc định tắt. Bật lên sẽ sao một đoạn ngắn của mỗi thư — người gửi, chủ đề và vài trăm ký tự đầu — vào một chỉ mục vector trong tài khoản Cloudflare này, để "hoá đơn của cửa hàng điện thoại" vẫn tìm ra thư dù những chữ đó không xuất hiện. Tìm theo từ khoá vẫn hoạt động cả hai cách. Tắt đi sẽ xoá các bản sao đó.',
+  "set.semOnNew":
+    'Đã bật. Thư mới được lập chỉ mục khi tới; hãy dùng "Lập chỉ mục thư cũ" cho thư đã lưu.',
   "set.semOff": "Đã tắt. {n} vector đã lưu cùng bản sao văn bản của bạn đã bị xoá.",
   "set.semIndexed": "Đã lập chỉ mục {n}. Còn {r} thư.",
   "set.semState": "Trạng thái",
@@ -1138,7 +1181,7 @@ export const vi: Dict = {
     "Bản triển khai này chưa gắn AI và chỉ mục vector, nên không bật được tính năng này ở đây.",
   "set.installTitle": "Cài ứng dụng",
   "set.installBody":
-    "MailVault cài được: dùng \"Install app\" của trình duyệt (hoặc Share → Add to Home Screen trên iOS) để có cửa sổ riêng. Ứng dụng chạy offline với các màn hình bạn đã mở; thư và tệp đính kèm không bao giờ được lưu cache.",
+    'MailVault cài được: dùng "Install app" của trình duyệt (hoặc Share → Add to Home Screen trên iOS) để có cửa sổ riêng. Ứng dụng chạy offline với các màn hình bạn đã mở; thư và tệp đính kèm không bao giờ được lưu cache.',
 
   "pal.trigger": "Nhảy tới",
   "pal.title": "Tìm kiếm và lệnh",
@@ -1191,8 +1234,10 @@ export const vi: Dict = {
   "composer.sending": "Đang gửi…",
   "composer.answerTo": "Câu trả lời gửi tới",
   "composer.fromRow": "Thư đi dưới dạng {alias}, nên phía kia không thấy địa chỉ nào khác của bạn.",
-  "composer.noAliases": "Không bí danh nào của bạn nằm trên tên miền đã bật gửi. Hãy bật gửi cho một tên miền, hoặc tạo bí danh trên tên miền đã bật.",
-  "composer.leavesVia": "Thư đi dưới dạng {sending}, và câu trả lời quay về {alias} — bản ghi gửi nằm ở subdomain đó, nên chính sách của nó không chạm gì đến nơi khác.",
+  "composer.noAliases":
+    "Không bí danh nào của bạn nằm trên tên miền đã bật gửi. Hãy bật gửi cho một tên miền, hoặc tạo bí danh trên tên miền đã bật.",
+  "composer.leavesVia":
+    "Thư đi dưới dạng {sending}, và câu trả lời quay về {alias} — bản ghi gửi nằm ở subdomain đó, nên chính sách của nó không chạm gì đến nơi khác.",
   "composer.unavailable": "Bản triển khai này chưa có khả năng gửi thư.",
   "composer.recipients": "{n} người nhận",
   "composer.remaining": "còn {n} thư hôm nay",
@@ -1204,21 +1249,28 @@ export const vi: Dict = {
   "composer.fileTooLarge": "{name} lớn hơn {max} nên không được đính kèm.",
   "composer.tooManyFiles": "Một thư chỉ mang được {n} tệp, nên các tệp sau không được đính kèm.",
 
+  "send.status.PREPARING": "Đang chuẩn bị — chưa gửi",
+  "send.status.UNKNOWN": "Chưa rõ đã nhận — không gửi lại",
   "send.status.QUEUED": "Đã gửi, đang chờ máy chủ phía kia",
   "send.status.DELIVERED": "Đã giao",
   "send.status.BOUNCED": "Bị trả lại",
   "send.status.SUPPRESSED": "Bị chặn vì từng trả lại trước đó",
   "send.status.FAILED": "Chưa gửi được",
 
-  "send.err.unknownSender": "Địa chỉ đó không phải alias đang hoạt động của bạn, nên không thể gửi dưới tên nó.",
-  "send.err.sendingDisabled": "Tên miền này chưa gửi được. Bật Email Sending cho nó trong mục Tên miền.",
+  "send.err.unknownSender":
+    "Địa chỉ đó không phải alias đang hoạt động của bạn, nên không thể gửi dưới tên nó.",
+  "send.err.sendingDisabled":
+    "Tên miền này chưa gửi được. Bật Email Sending cho nó trong mục Tên miền.",
   "send.err.binding": "Máy chủ này chưa được cấu hình gửi thư, nên thư không thể ra khỏi vault.",
   "send.err.noRecipients": "Thêm ít nhất một người nhận.",
   "send.err.noTarget": "Thư này không có địa chỉ hợp lệ để trả lời.",
-  "send.err.noAlias": "Thư này không còn alias riêng, nên không có địa chỉ để trả lời. Hãy viết thư mới.",
+  "send.err.noAlias":
+    "Thư này không còn alias riêng, nên không có địa chỉ để trả lời. Hãy viết thư mới.",
   "send.err.tooMany": "Tối đa 50 người nhận tính cả Đến, Cc và Bcc.",
   "send.err.dailyLimit": "Bạn đã tới hạn mức gửi thư trong ngày.",
-  "send.err.spoofedParent": "Thư đó không vượt qua xác thực người gửi — trả lời tức là viết thẳng cho kẻ mạo danh.",
+  "send.err.spoofedParent":
+    "Thư đó không vượt qua xác thực người gửi — trả lời tức là viết thẳng cho kẻ mạo danh.",
+  "send.err.unverifiedParent": "Bạn không thể trả lời vì người gửi này chưa được xác thực.",
   "send.err.empty": "Hãy viết nội dung trước.",
   "send.err.tooLarge": "Thư lớn hơn mức một email cho phép.",
   "send.err.badAddress": "Một trong các địa chỉ không hợp lệ.",
@@ -1231,15 +1283,20 @@ export const vi: Dict = {
   "dom.sendingDisabled": "Chưa gửi được",
   "dom.sendingUnknown": "Chưa kiểm tra",
   "dom.sendingVia": "Gửi thư dưới dạng",
-  "dom.sendingViaHint": "Chọn một tên không ghi bản ghi DNS nào — nó chỉ quyết định thư của tên miền này dùng danh tính gửi nào. Subdomain mang chính sách DMARC riêng, nên tên miền gốc không bị chạm tới.",
+  "dom.sendingViaHint":
+    "Chọn một tên không ghi bản ghi DNS nào — nó chỉ quyết định thư của tên miền này dùng danh tính gửi nào. Subdomain mang chính sách DMARC riêng, nên tên miền gốc không bị chạm tới.",
   "dom.sendingViaFailed": "Không lưu được lựa chọn.",
-  "dom.sendingAlreadyOnVia": "{domain} đã được bật gửi thư, nên thư từ tên miền này có thể gửi ra ngay.",
+  "dom.sendingAlreadyOnVia":
+    "{domain} đã được bật gửi thư, nên thư từ tên miền này có thể gửi ra ngay.",
   "dom.refreshSending": "Kiểm tra gửi thư",
   "dom.enableSending": "Bật gửi thư",
   "dom.enableSendingTitle": "Bật gửi thư cho {domain}",
-  "dom.enableSendingBody": "Email Sending sẽ thêm các bản ghi sau cho {domain} và ký thư bằng chúng:",
-  "dom.enableSendingNote": "MX của bạn — nơi thư đi vào — không bị đụng tới. Sau đó sẽ tồn tại một bản ghi DMARC cho toàn tên miền, và áp dụng cho mọi dịch vụ gửi thư bằng {domain}, không riêng ứng dụng này.",
-  "dom.dmarcConflict": "{domain} đã có bản ghi DMARC. Bật gửi thư sẽ thay đổi nó, và chính sách đó phủ cả những dịch vụ gửi thư mà ứng dụng này không biết.",
+  "dom.enableSendingBody":
+    "Email Sending sẽ thêm các bản ghi sau cho {domain} và ký thư bằng chúng:",
+  "dom.enableSendingNote":
+    "MX của bạn — nơi thư đi vào — không bị đụng tới. Sau đó sẽ tồn tại một bản ghi DMARC cho toàn tên miền, và áp dụng cho mọi dịch vụ gửi thư bằng {domain}, không riêng ứng dụng này.",
+  "dom.dmarcConflict":
+    "{domain} đã có bản ghi DMARC. Bật gửi thư sẽ thay đổi nó, và chính sách đó phủ cả những dịch vụ gửi thư mà ứng dụng này không biết.",
   "dom.dmarcConfirm": "Tôi hiểu chính sách DMARC của {domain} sẽ được tạo mới hoặc thay thế",
   "dom.sendingAlreadyOn": "Tên miền này đã bật gửi thư.",
   "dom.sendingEnabledDone": "Đã bật gửi thư cho {domain}.",
@@ -1247,7 +1304,8 @@ export const vi: Dict = {
 
   "inbox.groupConversations": "Theo hội thoại",
   "inbox.groupHint": "Mỗi hội thoại một dòng, thư mới nhất ở trên",
-  "inbox.groupOffWhileSearching": "Khi tìm kiếm, mọi thư khớp sẽ được liệt kê thay vì gộp theo hội thoại",
+  "inbox.groupOffWhileSearching":
+    "Khi tìm kiếm, mọi thư khớp sẽ được liệt kê thay vì gộp theo hội thoại",
   "inbox.nInThread": "{n} thư trong hội thoại này",
 
   "composer.quotedFrom": "Vào {when}, {who} đã viết",
@@ -1258,7 +1316,8 @@ export const vi: Dict = {
   "msg.unsubscribeLink": "Mở trang hủy đăng ký của bên gửi.",
   "msg.unsubscribeGo": "Hủy đăng ký",
   "msg.unsubscribeMail": "Hủy bằng email",
-  "msg.unsubscribeHidden": "Thư này có đề nghị hủy đăng ký, nhưng nó không được hiển thị vì người gửi không vượt qua xác thực — bấm vào đó chỉ báo cho người lạ biết địa chỉ này vẫn đang được đọc.",
+  "msg.unsubscribeHidden":
+    "Thư này có đề nghị hủy đăng ký, nhưng nó không được hiển thị vì người gửi không vượt qua xác thực — bấm vào đó chỉ báo cho người lạ biết địa chỉ này vẫn đang được đọc.",
 
   "inbox.starredTab": "Đã đánh dấu",
   "inbox.selectAllPage": "Chọn mọi thư trong trang này",
@@ -1281,7 +1340,8 @@ export const vi: Dict = {
   "bulk.delete": "Xoá",
   "bulk.deleteTitle": "Xoá {n} thư?",
   "bulk.deleteConfirm": "Xoá {n}",
-  "bulk.deleteBody": "Thư và tệp đính kèm bị xoá hẳn. Không có gì khác bị xoá, và không địa chỉ nào bị thay đổi.",
+  "bulk.deleteBody":
+    "Thư và tệp đính kèm bị xoá hẳn. Không có gì khác bị xoá, và không địa chỉ nào bị thay đổi.",
   "bulk.failed": "Thao tác chưa được thực hiện.",
 
   "search.op.from": "từ",
@@ -1302,7 +1362,6 @@ export const vi: Dict = {
   "send.status.DEFERRED": "Máy chủ kia đang thử lại",
   "send.status.REJECTED": "Bị từ chối",
   "send.status.COMPLAINED": "Bị báo spam",
-
 };
 
 const DICTS: Record<Lang, Dict> = { en, vi };
@@ -1320,7 +1379,10 @@ function readStored(): string | null {
   }
 }
 
-let current: Lang = detectLang(typeof navigator !== "undefined" ? navigator.language : "en", readStored());
+let current: Lang = detectLang(
+  typeof navigator !== "undefined" ? navigator.language : "en",
+  readStored(),
+);
 const listeners = new Set<() => void>();
 
 if (typeof document !== "undefined") document.documentElement.lang = current;

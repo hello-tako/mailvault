@@ -64,6 +64,7 @@ export interface MessageRow {
   subject: string | null;
   preview: string | null;
   received_at: string;
+  header_date?: string | null;
   raw_size: number;
   raw_r2_key: string;
   parsed_r2_key: string | null;

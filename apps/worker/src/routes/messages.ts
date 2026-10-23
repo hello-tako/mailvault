@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import {
   BulkMessageAction,
@@ -12,8 +11,13 @@ import {
 } from "@mailvault/shared";
 import type { AppEnv } from "../app-env";
 import {
-  deleteMessage,
-  deleteMessages,
+  deletionJobCounts,
+  failedDeletionJobs,
+  retryDeletionJob,
+  requestMessageDeletion,
+  requestMessagesDeletion,
+} from "../db/deletions";
+import {
   findAttachment,
   getMessageDetail,
   getMessageRow,
@@ -25,24 +29,16 @@ import {
 } from "../db/messages";
 import { AppError, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
-import { sendReply } from "../mail/send";
+import { sendIdempotencyKey, sendReply } from "../mail/send";
 import { sanitizeFilename } from "../lib/filename";
-import { deleteKeys, getObject } from "../storage/r2";
-import { removeIndex, searchMessageIds, semanticEnabled } from "../lib/semantic";
+import { getObject } from "../storage/r2";
+import { searchMessageIds, semanticEnabled } from "../lib/semantic";
 import { sanitizeEmailHtml } from "../security/sanitize-html";
+import { requireIrreversibleStepUp, STEP_UP_HEADER } from "../security/irreversible";
 import { actorOf, parseQuery, readJson } from "./_helpers";
 
 const IdParam = z.object({ id: z.string().min(1) });
 const AttachmentParam = z.object({ messageId: z.string().min(1), attachmentId: z.string().min(1) });
-
-/** Run after the response leaves: waitUntil in the Workers runtime, fire-and-forget under tests. */
-function detach(c: Context<AppEnv>, work: Promise<unknown>): void {
-  try {
-    c.executionCtx.waitUntil(work);
-  } catch {
-    void work;
-  }
-}
 
 /** `receivedAt|id` → the pair, or undefined when the client sent something unusable. */
 function parseCursor(raw: string | undefined): { receivedAt: string; id: string } | undefined {
@@ -60,7 +56,10 @@ function parseCursor(raw: string | undefined): { receivedAt: string; id: string 
  * not a flag; it is handled on its own path. Totaling the two coverage sets is what makes
  * adding a seventh action a compile error rather than a runtime `undefined`.
  */
-const FLAG_ACTIONS: Record<Exclude<BulkMessageAction, typeof BulkMessageAction.Delete>, [FlagColumn, 0 | 1]> = {
+const FLAG_ACTIONS: Record<
+  Exclude<BulkMessageAction, typeof BulkMessageAction.Delete>,
+  [FlagColumn, 0 | 1]
+> = {
   [BulkMessageAction.Read]: ["is_read", 1],
   [BulkMessageAction.Unread]: ["is_read", 0],
   [BulkMessageAction.Star]: ["starred", 1],
@@ -103,6 +102,18 @@ export const messagesRoute = new Hono<AppEnv>()
     return c.json({ ...paginated(items, { limit: query.limit, offset: query.offset, total }), nextCursor });
   })
 
+  .get("/api/deletions", async (c) =>
+    c.json({ jobs: await deletionJobCounts(c.env.DB), failed: await failedDeletionJobs(c.env.DB) }),
+  )
+
+  .post("/api/deletions/:id/retry", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const result = await retryDeletionJob(c.env.DB, id);
+    if (!result.found) throw notFound("Deletion job not found");
+    log.info("deletion_job_retry_requested", { actor: actorOf(c).email, jobId: id });
+    return c.json({ id, state: result.state }, 202);
+  })
+
   /**
    * Tab and mailbox badges.
    *
@@ -128,17 +139,17 @@ export const messagesRoute = new Hono<AppEnv>()
   .post("/api/messages/bulk", async (c) => {
     const { ids, action } = await readJson(c, BulkMessageInputSchema);
     if (action === BulkMessageAction.Delete) {
-      const { removed, keys } = await deleteMessages(c.env.DB, ids);
-      const purged = await deleteKeys(c.env.MAIL_BUCKET, keys);
-      // Embeddings are copies of content the owner just deleted; they go with it — but
-      // detached, because up to 200 Vectorize calls must not hold the response that
-      // already says the mail is gone.
-      detach(c, Promise.allSettled(ids.map((id) => removeIndex(c.env, id))));
-      log.info("messages_bulk_deleted", { actor: actorOf(c).email, count: removed, r2Attempted: purged.attempted });
+      await requireIrreversibleStepUp(
+        c.env.DB,
+        c.req.header(STEP_UP_HEADER),
+        "message.bulk-delete",
+      );
+      const accepted = await requestMessagesDeletion(c.env.DB, ids);
+      log.info("messages_bulk_deletion_queued", { actor: actorOf(c).email, count: accepted });
       return c.json({
         action,
-        affected: removed,
-        r2ObjectsRemoved: purged.attempted - purged.failed.length,
+        affected: accepted,
+        r2ObjectsRemoved: 0,
       } satisfies BulkMessageResult);
     }
     const [column, value] = FLAG_ACTIONS[action];
@@ -185,7 +196,13 @@ export const messagesRoute = new Hono<AppEnv>()
   .post("/api/messages/:id/reply", async (c) => {
     const { id } = IdParam.parse({ id: c.req.param("id") });
     const input = await readJson(c, ReplyInputSchema);
-    const result = await sendReply(id, input, c.env, c.env.DB, c.env.MAIL_BUCKET);
+    const result = await sendReply(
+      id,
+      { ...input, idempotencyKey: sendIdempotencyKey(c.req.header("Idempotency-Key")) },
+      c.env,
+      c.env.DB,
+      c.env.MAIL_BUCKET,
+    );
     if (!result.ok) {
       log.warn("reply_refused", { messageId: id, code: result.code });
       throw new AppError(400, result.code, result.message);
@@ -194,16 +211,21 @@ export const messagesRoute = new Hono<AppEnv>()
     return c.json(result.outcome, 201);
   })
 
-  /** Delete permanently removes the row plus raw/parsed/attachment R2 objects (section 24). */
+  /** Cleanup runs from durable deletion jobs; pending mail is hidden until cleanup completes. */
   .delete("/api/messages/:id", async (c) => {
     const { id } = IdParam.parse({ id: c.req.param("id") });
-    if (!(await getMessageRow(c.env.DB, id))) throw notFound("Message not found");
-    const keys = await deleteMessage(c.env.DB, id);
-    const removed = await deleteKeys(c.env.MAIL_BUCKET, keys);
-    // The embedding is a copy of content the owner just deleted; it goes with it.
-    await removeIndex(c.env, id);
-    log.info("message_deleted", { actor: actorOf(c).email, messageId: id, r2Attempted: removed.attempted });
-    return c.json({ deleted: true, r2ObjectsRemoved: removed.attempted - removed.failed.length });
+    await requireIrreversibleStepUp(c.env.DB, c.req.header(STEP_UP_HEADER), "message.delete");
+    const result = await requestMessageDeletion(c.env.DB, id);
+    if (!result.found) throw notFound("Message not found");
+    log.info("message_deletion_queued", {
+      actor: actorOf(c).email,
+      messageId: id,
+      state: result.state,
+    });
+    return c.json(
+      { deleted: result.state === "DONE", state: result.state },
+      result.state === "DONE" ? 200 : 202,
+    );
   })
 
   /**

@@ -5,8 +5,24 @@ import { withStepUp } from "../lib/passkeys";
 import { useAsync } from "../lib/useAsync";
 import { relativeTime } from "../lib/format";
 import { t } from "../lib/i18n";
-import { ConfirmDialog, EmptyState, ErrorBanner, Menu, Modal, Row, SkeletonList, StatusPill, useOpenRow } from "../components/ui";
-import { FILTERS, bucketOf, isRoutingNotEnabledReceipt, routingConsoleUrl, type Bucket } from "../lib/domains";
+import {
+  ConfirmDialog,
+  EmptyState,
+  ErrorBanner,
+  Menu,
+  Modal,
+  Row,
+  SkeletonList,
+  StatusPill,
+  useOpenRow,
+} from "../components/ui";
+import {
+  FILTERS,
+  bucketOf,
+  isRoutingNotEnabledReceipt,
+  routingConsoleUrl,
+  type Bucket,
+} from "../lib/domains";
 import {
   AuthPolicy,
   ConflictType,
@@ -42,7 +58,13 @@ function RoutingHint({ d }: { d: Domain }) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      style={{ textDecoration: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px", whiteSpace: "nowrap" }}
+      style={{
+        textDecoration: "none",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "4px 8px",
+        whiteSpace: "nowrap",
+      }}
     >
       {t("dom.enableRouting")}
     </a>
@@ -130,12 +152,23 @@ export function Domains() {
 
   const visible = useMemo(
     () =>
-      domains.filter((d) => (filter === "all" ? true : bucketOf(d, preflights[d.cloudflareZoneId], outcomes[d.cloudflareZoneId]) === filter)),
+      domains.filter((d) =>
+        filter === "all"
+          ? true
+          : bucketOf(d, preflights[d.cloudflareZoneId], outcomes[d.cloudflareZoneId]) === filter,
+      ),
     [domains, filter, preflights, outcomes],
   );
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: domains.length, ready: 0, conflict: 0, error: 0, unconfigured: 0, other: 0 };
+    const c: Record<string, number> = {
+      all: domains.length,
+      ready: 0,
+      conflict: 0,
+      error: 0,
+      unconfigured: 0,
+      other: 0,
+    };
     for (const d of domains) {
       const k = bucketOf(d, preflights[d.cloudflareZoneId], outcomes[d.cloudflareZoneId]);
       c[k] = (c[k] ?? 0) + 1;
@@ -175,9 +208,13 @@ export function Domains() {
   }
 
   function selectVisibleEligible() {
-    const eligible = visible.filter((d) => preflights[d.cloudflareZoneId]?.safeToProvision).map((d) => d.cloudflareZoneId);
+    const eligible = visible
+      .filter((d) => preflights[d.cloudflareZoneId]?.safeToProvision)
+      .map((d) => d.cloudflareZoneId);
     setSelected((prev) => new Set([...prev, ...eligible]));
-    setNotice(eligible.length ? t("dom.selectedEligible", { n: eligible.length }) : t("dom.noneEligible"));
+    setNotice(
+      eligible.length ? t("dom.selectedEligible", { n: eligible.length }) : t("dom.noneEligible"),
+    );
   }
 
   async function runSync() {
@@ -207,7 +244,9 @@ export function Domains() {
         return next;
       });
       const conflicts = r.results.filter((x) => !x.safeToProvision && x.conflict).length;
-      const denied = r.results.filter((x) => x.classification === PreflightClassification.ApiPermissionError).length;
+      const denied = r.results.filter(
+        (x) => x.classification === PreflightClassification.ApiPermissionError,
+      ).length;
       setNotice(
         t("dom.pfDone", { n: r.results.length }) +
           t("dom.pfConflicts", { n: conflicts }) +
@@ -238,7 +277,9 @@ export function Domains() {
       } else if (report.drifted.length === 0 && report.failed.length === 0) {
         setNotice(
           t("dom.vAll", { n: report.checked }) +
-            (report.restored.length ? t("dom.vRestored", { names: report.restored.join(", ") }) : ""),
+            (report.restored.length
+              ? t("dom.vRestored", { names: report.restored.join(", ") })
+              : ""),
         );
       } else {
         setNotice(
@@ -250,7 +291,8 @@ export function Domains() {
         );
         setExpanded((prev) => {
           const next = new Set(prev);
-          for (const d of data?.items ?? []) if (report.drifted.includes(d.name)) next.add(d.cloudflareZoneId);
+          for (const d of data?.items ?? [])
+            if (report.drifted.includes(d.name)) next.add(d.cloudflareZoneId);
           return next;
         });
       }
@@ -262,24 +304,32 @@ export function Domains() {
     }
   }
 
-  const needsTakeover = selectedZones.some((z) => preflights[z]?.classification === PreflightClassification.CatchAllConflict);
+  const needsTakeover = selectedZones.some(
+    (z) => preflights[z]?.classification === PreflightClassification.CatchAllConflict,
+  );
   /**
    * Selected domains whose mail currently lands at another provider, with the exact records
    * at stake. The owner has to confirm deleting these per batch, and sees what goes.
    */
   const mxTargets = selectedZones
     .map((z) => ({ zoneId: z, name: nameOf(z), pf: preflights[z] }))
-    .filter((x) => x.pf?.classification === PreflightClassification.MxConflict && (x.pf.conflict?.mxRecords?.length ?? 0) > 0);
+    .filter(
+      (x) =>
+        x.pf?.classification === PreflightClassification.MxConflict &&
+        (x.pf.conflict?.mxRecords?.length ?? 0) > 0,
+    );
 
   async function runProvision() {
     if (selectedZones.length === 0) return;
     setBusy(true);
     setActionError(null);
     try {
-      const r = await api.provisionDomains(selectedZones, {
-        allowCatchAllTakeover: takeover,
-        allowMxTakeover: mxTakeover,
-      });
+      const r = await withStepUp(() =>
+        api.provisionDomains(selectedZones, {
+          allowCatchAllTakeover: takeover,
+          allowMxTakeover: mxTakeover,
+        }),
+      );
       setOutcomes((prev) => {
         const next = { ...prev };
         for (const o of r.results) next[o.zoneId] = o;
@@ -358,10 +408,19 @@ export function Domains() {
           <button onClick={runSync} disabled={busy}>
             {busy ? t("common.working") : t("dom.sync")}
           </button>
-          <button className="ghost small" onClick={() => runPreflight(allZones)} disabled={busy || allZones.length === 0}>
+          <button
+            className="ghost small"
+            onClick={() => runPreflight(allZones)}
+            disabled={busy || allZones.length === 0}
+          >
             {t("dom.preflightAll")}
           </button>
-          <button className="ghost small" onClick={runVerify} disabled={busy} title={t("dom.verifyTitle")}>
+          <button
+            className="ghost small"
+            onClick={runVerify}
+            disabled={busy}
+            title={t("dom.verifyTitle")}
+          >
             {t("dom.verify")}
           </button>
         </div>
@@ -390,7 +449,12 @@ export function Domains() {
           <div className="toolbar">
             <div className="tabs">
               {FILTERS.map((f) => (
-                <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
+                <button
+                  key={f.id}
+                  type="button"
+                  className={filter === f.id ? "active" : ""}
+                  onClick={() => setFilter(f.id)}
+                >
                   {t(f.labelKey)} ({counts[f.id] ?? 0})
                 </button>
               ))}
@@ -417,7 +481,9 @@ export function Domains() {
                   <input
                     type="checkbox"
                     style={{ width: "auto", minHeight: 0 }}
-                    checked={visible.length > 0 && visible.every((d) => selected.has(d.cloudflareZoneId))}
+                    checked={
+                      visible.length > 0 && visible.every((d) => selected.has(d.cloudflareZoneId))
+                    }
                     onChange={() => {
                       const allVis = visible.map((d) => d.cloudflareZoneId);
                       const every = allVis.every((z) => selected.has(z));
@@ -480,7 +546,9 @@ export function Domains() {
                           {pf ? <ClassPill c={pf.classification} /> : null}
                           {/* Sending is its own capability: a domain can receive and still
                               not be allowed to sign outbound mail. */}
-                          <span className={`pill ${d.sendingStatus === "ENABLED" ? "ok" : "neutral"}`}>
+                          <span
+                            className={`pill ${d.sendingStatus === "ENABLED" ? "ok" : "neutral"}`}
+                          >
                             {t(
                               d.sendingStatus === "ENABLED"
                                 ? "dom.sendingEnabled"
@@ -496,17 +564,28 @@ export function Domains() {
                     actions={
                       <>
                         {hasEvidence ? (
-                          <button className="small" onClick={() => toggleExpand(zoneId)} aria-expanded={open}>
+                          <button
+                            className="small"
+                            onClick={() => toggleExpand(zoneId)}
+                            aria-expanded={open}
+                          >
                             {t(open ? "dom.hideDetails" : "dom.showDetails")}
                           </button>
                         ) : null}
                         {d.mailStatus === MailStatus.Ready && (
                           <>
-                            <button className="small" onClick={() => navigate(`/inbox?domain=${d.id}`)}>
+                            <button
+                              className="small"
+                              onClick={() => navigate(`/inbox?domain=${d.id}`)}
+                            >
                               {t("dom.openMailbox")}
                             </button>
                             {d.sendingStatus !== "ENABLED" ? (
-                              <button className="small" onClick={() => setSendingFor(d)} disabled={busy}>
+                              <button
+                                className="small"
+                                onClick={() => setSendingFor(d)}
+                                disabled={busy}
+                              >
                                 {t("dom.enableSending")}
                               </button>
                             ) : null}
@@ -515,7 +594,9 @@ export function Domains() {
                               value={d.authPolicy}
                               disabled={busy}
                               title={t("dom.authPolicyTitle")}
-                              onChange={(e) => void changeAuthPolicy(d, e.target.value as AuthPolicy)}
+                              onChange={(e) =>
+                                void changeAuthPolicy(d, e.target.value as AuthPolicy)
+                              }
                             >
                               <option value={AuthPolicy.Warn}>{t("dom.authWarn")}</option>
                               <option value={AuthPolicy.Reject}>{t("dom.authReject")}</option>
@@ -526,19 +607,26 @@ export function Domains() {
                         <Menu
                           small
                           items={[
-                            ...(d.mailStatus === MailStatus.Failed || d.mailStatus === MailStatus.Conflict
+                            ...(d.mailStatus === MailStatus.Failed ||
+                            d.mailStatus === MailStatus.Conflict
                               ? [
                                   {
                                     label: t("dom.retry"),
                                     disabled: busy,
                                     onSelect: () => {
-                                      if (d.conflictType === ConflictType.CatchAll) setRetryTakeover(d);
+                                      if (d.conflictType === ConflictType.CatchAll)
+                                        setRetryTakeover(d);
                                       else void runRetry(d, false);
                                     },
                                   },
                                 ]
                               : []),
-                            { label: t("dom.remove"), danger: true, disabled: busy, onSelect: () => setRemoving(d) },
+                            {
+                              label: t("dom.remove"),
+                              danger: true,
+                              disabled: busy,
+                              onSelect: () => setRemoving(d),
+                            },
                           ]}
                         />
                       </>
@@ -560,12 +648,18 @@ export function Domains() {
 
           {selectedZones.length > 0 && (
             <div className="bulkbar">
-              <span className="count">{t("dom.selected", { n: selectedZones.length, total: visible.length })}</span>
+              <span className="count">
+                {t("dom.selected", { n: selectedZones.length, total: visible.length })}
+              </span>
               <div className="actions">
                 <button className="ghost small" onClick={() => setSelected(new Set())}>
                   {t("dom.clear")}
                 </button>
-                <button className="small" onClick={() => runPreflight(selectedZones)} disabled={busy}>
+                <button
+                  className="small"
+                  onClick={() => runPreflight(selectedZones)}
+                  disabled={busy}
+                >
                   {t("dom.preflightN", { n: selectedZones.length })}
                 </button>
                 <button
@@ -590,7 +684,16 @@ export function Domains() {
           <p className="muted" style={{ marginTop: 0 }}>
             {t("dom.enableBody", { n: selectedZones.length })}
           </p>
-          <ul className="mono" style={{ paddingLeft: 18, fontSize: 12, marginBottom: 12, maxHeight: 160, overflow: "auto" }}>
+          <ul
+            className="mono"
+            style={{
+              paddingLeft: 18,
+              fontSize: 12,
+              marginBottom: 12,
+              maxHeight: 160,
+              overflow: "auto",
+            }}
+          >
             {selectedZones.map((z) => (
               <li key={z}>{nameOf(z)}</li>
             ))}
@@ -604,7 +707,12 @@ export function Domains() {
           {mxTargets.length > 0 && (
             <>
               <label className="row" style={{ cursor: "pointer", marginBottom: 12 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={mxTakeover} onChange={(e) => setMxTakeover(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={mxTakeover}
+                  onChange={(e) => setMxTakeover(e.target.checked)}
+                />
                 {t("dom.mxTakeover", { n: mxTargets.length })}
               </label>
               {mxTakeover && (
@@ -613,7 +721,9 @@ export function Domains() {
                     {mxTargets.map((t2) => (
                       <div key={t2.zoneId} style={{ marginBottom: 4 }}>
                         <strong>{t2.name}</strong>:{" "}
-                        {(t2.pf?.conflict?.mxRecords ?? []).map((m) => `${m.priority} ${m.exchange}`).join(", ")}
+                        {(t2.pf?.conflict?.mxRecords ?? [])
+                          .map((m) => `${m.priority} ${m.exchange}`)
+                          .join(", ")}
                       </div>
                     ))}
                   </div>
@@ -628,16 +738,31 @@ export function Domains() {
           {needsTakeover && (
             <>
               <label className="row" style={{ cursor: "pointer", marginBottom: 12 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={takeover} onChange={(e) => setTakeover(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={takeover}
+                  onChange={(e) => setTakeover(e.target.checked)}
+                />
                 {t("dom.caTakeover")}
               </label>
-              {takeover && <div className="banner error" style={{ marginBottom: 12 }}>{t("dom.caWarn")}</div>}
+              {takeover && (
+                <div className="banner error" style={{ marginBottom: 12 }}>
+                  {t("dom.caWarn")}
+                </div>
+              )}
             </>
           )}
 
           <div className="row-end">
             <button onClick={() => setConfirmProvision(false)}>{t("common.cancel")}</button>
-            <button className="primary" onClick={runProvision} disabled={busy || (needsTakeover && !takeover) || (mxTargets.length > 0 && !mxTakeover)}>
+            <button
+              className="primary"
+              onClick={runProvision}
+              disabled={
+                busy || (needsTakeover && !takeover) || (mxTargets.length > 0 && !mxTakeover)
+              }
+            >
               {busy ? t("dom.enabling") : t("dom.enableMail")}
             </button>
           </div>
@@ -654,7 +779,11 @@ export function Domains() {
           </div>
           <div className="row-end">
             <button onClick={() => setRetryTakeover(null)}>{t("common.cancel")}</button>
-            <button className="danger" onClick={() => runRetry(retryTakeover, true)} disabled={busy}>
+            <button
+              className="danger"
+              onClick={() => runRetry(retryTakeover, true)}
+              disabled={busy}
+            >
               {t("dom.retryConfirm")}
             </button>
           </div>
@@ -682,7 +811,8 @@ export function Domains() {
           description={
             <>
               <div style={{ marginBottom: 8 }}>
-                {t("dom.removeBodyA")} <span className="addr">{removing.name}</span> {t("dom.removeBodyB")}
+                {t("dom.removeBodyA")} <span className="addr">{removing.name}</span>{" "}
+                {t("dom.removeBodyB")}
               </div>
               <div className="banner" style={{ marginBottom: 0 }}>
                 {t("dom.removeNoteA")} <strong>{t("dom.removeNot")}</strong> {t("dom.removeNoteB")}
@@ -723,15 +853,24 @@ function SendingDialog({
   // The dialog's own copy, because `domain` is a snapshot: after a choice lands the list
   // refetches but this prop does not, and a stale name here would preview the wrong identity.
   const [via, setVia] = useState<string | null>(domain.sendingVia);
-  const { data: preview, error, loading } = useAsync(() => api.sendingPreview(domain.cloudflareZoneId), [domain.cloudflareZoneId, via]);
-  const { data: names } = useAsync(() => api.sendingNames(domain.cloudflareZoneId), [domain.cloudflareZoneId]);
+  const {
+    data: preview,
+    error,
+    loading,
+  } = useAsync(() => api.sendingPreview(domain.cloudflareZoneId), [domain.cloudflareZoneId, via]);
+  const { data: names } = useAsync(
+    () => api.sendingNames(domain.cloudflareZoneId),
+    [domain.cloudflareZoneId],
+  );
   const [confirmDmarc, setConfirmDmarc] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const blocked = !!preview?.dmarcConflict && !confirmDmarc;
   // The zone's other sending names, which is how a domain reaches an identity that is already
   // onboarded without anybody writing a DMARC policy at its apex.
-  const others = (names?.items ?? []).filter((n) => n.name.toLowerCase() !== domain.name.toLowerCase());
+  const others = (names?.items ?? []).filter(
+    (n) => n.name.toLowerCase() !== domain.name.toLowerCase(),
+  );
 
   /** Point this domain's mail at one of its zone's sending names. Writes no DNS. */
   async function chooseVia(chosen: string) {
@@ -751,8 +890,14 @@ function SendingDialog({
     try {
       // The route decides that a DMARC takeover needs the passkey; the page only reacts to
       // the 403 and replays the call, so a gate added later cannot be missed here.
-      const r = await withStepUp(() => api.enableSending(domain.cloudflareZoneId, !!preview?.dmarcConflict));
-      onDone(t(r.alreadyEnabled ? "dom.sendingAlreadyOn" : "dom.sendingEnabledDone", { domain: preview?.domainName ?? domain.name }));
+      const r = await withStepUp(() =>
+        api.enableSending(domain.cloudflareZoneId, !!preview?.dmarcConflict),
+      );
+      onDone(
+        t(r.alreadyEnabled ? "dom.sendingAlreadyOn" : "dom.sendingEnabledDone", {
+          domain: preview?.domainName ?? domain.name,
+        }),
+      );
     } catch (err) {
       onError(err instanceof Error ? err.message : t("dom.sendingNeedsPermission"));
       setBusy(false);
@@ -768,7 +913,12 @@ function SendingDialog({
           {others.length > 0 ? (
             <div className="field">
               <label htmlFor="sending-via">{t("dom.sendingVia")}</label>
-              <select id="sending-via" value={via ?? ""} disabled={busy} onChange={(e) => void chooseVia(e.target.value)}>
+              <select
+                id="sending-via"
+                value={via ?? ""}
+                disabled={busy}
+                onChange={(e) => void chooseVia(e.target.value)}
+              >
                 <option value="">{domain.name}</option>
                 {others.map((n) => (
                   <option key={n.name} value={n.name}>
@@ -780,7 +930,9 @@ function SendingDialog({
             </div>
           ) : null}
           {preview.alreadyEnabled ? (
-            <div className="banner ok">{t("dom.sendingAlreadyOnVia", { domain: preview.domainName })}</div>
+            <div className="banner ok">
+              {t("dom.sendingAlreadyOnVia", { domain: preview.domainName })}
+            </div>
           ) : (
             <>
               <p className="muted">{t("dom.enableSendingBody", { domain: preview.domainName })}</p>
@@ -792,12 +944,20 @@ function SendingDialog({
                   </li>
                 ))}
               </ul>
-              <div className="banner">{t("dom.enableSendingNote", { domain: preview.domainName })}</div>
+              <div className="banner">
+                {t("dom.enableSendingNote", { domain: preview.domainName })}
+              </div>
               {preview.dmarcConflict ? (
                 <>
-                  <div className="banner error">{t("dom.dmarcConflict", { domain: preview.domainName })}</div>
+                  <div className="banner error">
+                    {t("dom.dmarcConflict", { domain: preview.domainName })}
+                  </div>
                   <label className="row checkbox-row">
-                    <input type="checkbox" checked={confirmDmarc} onChange={(e) => setConfirmDmarc(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={confirmDmarc}
+                      onChange={(e) => setConfirmDmarc(e.target.checked)}
+                    />
                     <span>{t("dom.dmarcConfirm", { domain: preview.domainName })}</span>
                   </label>
                 </>
@@ -807,7 +967,12 @@ function SendingDialog({
           <div className="row-end">
             <button onClick={onClose}>{t("common.cancel")}</button>
             {preview.alreadyEnabled ? null : (
-              <button className="primary" disabled={blocked || busy} aria-busy={busy} onClick={() => void enable()}>
+              <button
+                className="primary"
+                disabled={blocked || busy}
+                aria-busy={busy}
+                onClick={() => void enable()}
+              >
                 {t("dom.enableSending")}
               </button>
             )}

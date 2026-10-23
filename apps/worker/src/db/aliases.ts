@@ -1,3 +1,4 @@
+import { visibleMessageSql } from "./visibility";
 import type { Alias, AliasStats, AliasStatus } from "@mailvault/shared";
 import { conflict } from "../lib/errors";
 import { newId, nowIso } from "../lib/util";
@@ -39,7 +40,7 @@ export async function getAliasById(db: D1Database, id: string): Promise<Alias | 
   const row = await db
     .prepare(
       `SELECT a.*, d.name AS domain_name,
-        (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id) AS message_count
+        (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id AND ${visibleMessageSql()}) AS message_count
        FROM aliases a JOIN domains d ON d.id = a.domain_id WHERE a.id = ?1`,
     )
     .bind(id)
@@ -49,12 +50,16 @@ export async function getAliasById(db: D1Database, id: string): Promise<Alias | 
 
 export type AliasListView = "all" | "active" | "archived";
 
-export async function listAliases(db: D1Database, q?: string, view: AliasListView = "active"): Promise<Alias[]> {
+export async function listAliases(
+  db: D1Database,
+  q?: string,
+  view: AliasListView = "active",
+): Promise<Alias[]> {
   const like = q ? `%${q.toLowerCase().replace(/\s+/g, "%")}%` : null;
   const sql = `
     SELECT a.*, d.name AS domain_name,
-      (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id) AS message_count,
-      (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id AND m.is_read = 0) AS unread_count
+      (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id AND ${visibleMessageSql()}) AS message_count,
+      (SELECT COUNT(*) FROM messages m WHERE m.alias_id = a.id AND ${visibleMessageSql()} AND m.is_read = 0) AS unread_count
     FROM aliases a JOIN domains d ON d.id = a.domain_id
     WHERE (?2 = 'all' OR (?2 = 'archived' AND a.archived = 1) OR (?2 = 'active' AND a.archived = 0))
       AND (?1 IS NULL OR lower(a.address) LIKE ?1 OR lower(COALESCE(a.label,'')) LIKE ?1 OR lower(COALESCE(a.notes,'')) LIKE ?1)
@@ -71,14 +76,19 @@ export async function aliasStats(db: D1Database, id: string): Promise<AliasStats
               COALESCE(SUM(is_read = 0), 0) AS unread,
               MIN(received_at) AS first_received_at,
               MAX(received_at) AS last_received_at
-       FROM messages WHERE alias_id = ?1`,
+       FROM messages m WHERE alias_id = ?1 AND ${visibleMessageSql()}`,
     )
     .bind(id)
-    .first<{ messages: number; unread: number; first_received_at: string | null; last_received_at: string | null }>();
+    .first<{
+      messages: number;
+      unread: number;
+      first_received_at: string | null;
+      last_received_at: string | null;
+    }>();
   const { results } = await db
     .prepare(
       `SELECT COALESCE(header_from, envelope_from) AS name, COUNT(*) AS count
-       FROM messages WHERE alias_id = ?1
+       FROM messages m WHERE alias_id = ?1 AND ${visibleMessageSql()}
        GROUP BY name ORDER BY count DESC, name ASC LIMIT 6`,
     )
     .bind(id)
@@ -123,7 +133,10 @@ export async function setAliasStatus(
   id: string,
   status: AliasStatus,
 ): Promise<void> {
-  await db.prepare(`UPDATE aliases SET status = ?2, updated_at = ?3 WHERE id = ?1`).bind(id, status, nowIso()).run();
+  await db
+    .prepare(`UPDATE aliases SET status = ?2, updated_at = ?3 WHERE id = ?1`)
+    .bind(id, status, nowIso())
+    .run();
 }
 
 export interface AliasPatch {
@@ -148,7 +161,10 @@ export async function updateAlias(db: D1Database, id: string, patch: AliasPatch)
   if (sets.length === 0) return;
   binds.push(nowIso());
   sets.push(`updated_at = ?${binds.length}`);
-  await db.prepare(`UPDATE aliases SET ${sets.join(", ")} WHERE id = ?1`).bind(...binds).run();
+  await db
+    .prepare(`UPDATE aliases SET ${sets.join(", ")} WHERE id = ?1`)
+    .bind(...binds)
+    .run();
 }
 
 /** Returns the R2 keys that must be removed after the DB rows are deleted. */
@@ -157,26 +173,25 @@ export async function deleteAlias(
   id: string,
   purgeMessages: boolean,
 ): Promise<{ rawKeys: string[] }> {
-  if (!purgeMessages) {
-    // messages.alias_id is ON DELETE SET NULL, so mail is preserved and stays
-    // attributable via envelope_to. Only the alias mailbox itself is removed.
-    await db.prepare(`DELETE FROM aliases WHERE id = ?1`).bind(id).run();
-    return { rawKeys: [] };
-  }
-  const keys = await collectMessageR2KeysForAlias(db, id);
-  await db.prepare(`DELETE FROM messages WHERE alias_id = ?1`).bind(id).run();
+  if (purgeMessages) throw new Error("alias_purge_requires_durable_job");
+  // Permanent purge uses requestAliasPurge; this helper only detaches preserved mail.
   await db.prepare(`DELETE FROM aliases WHERE id = ?1`).bind(id).run();
-  return { rawKeys: keys };
+  return { rawKeys: [] };
 }
 
-export async function collectMessageR2KeysForAlias(db: D1Database, aliasId: string): Promise<string[]> {
+export async function collectMessageR2KeysForAlias(
+  db: D1Database,
+  aliasId: string,
+): Promise<string[]> {
   const msgs = await db
-    .prepare(`SELECT raw_r2_key, parsed_r2_key FROM messages WHERE alias_id = ?1`)
+    .prepare(
+      `SELECT raw_r2_key, parsed_r2_key FROM messages m WHERE alias_id = ?1 AND ${visibleMessageSql()}`,
+    )
     .bind(aliasId)
     .all<{ raw_r2_key: string; parsed_r2_key: string | null }>();
   const atts = await db
     .prepare(
-      `SELECT r2_key FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE alias_id = ?1)`,
+      `SELECT r2_key FROM attachments WHERE message_id IN (SELECT id FROM messages m WHERE alias_id = ?1 AND ${visibleMessageSql()})`,
     )
     .bind(aliasId)
     .all<{ r2_key: string }>();

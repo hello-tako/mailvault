@@ -1,7 +1,14 @@
-import type { Domain, PreflightResult, ProvisionOutcome } from "@mailvault/shared";
-import { CatchAllStatus, ConflictType, MailStatus, PreflightClassification, RoutingStatus } from "@mailvault/shared";
+import type { ConflictDetails, Domain, PreflightResult, ProvisionOutcome } from "@mailvault/shared";
+import {
+  CatchAllStatus,
+  ConflictType,
+  MailStatus,
+  PreflightClassification,
+  RoutingStatus,
+} from "@mailvault/shared";
 import type { CloudflareClient } from "../cf/api-client";
 import { CloudflareApiError } from "../cf/api-client";
+import { forbidden } from "../lib/errors";
 import { getDomainByZoneId, patchDomainProvisioning, recordProvisioningEvent } from "../db/domains";
 import { log } from "../lib/logging";
 import { mapWithConcurrency, newId } from "../lib/util";
@@ -13,6 +20,10 @@ export interface ProvisionOptions {
   allowCatchAllTakeover?: boolean;
   /** Owner explicitly confirmed deleting another provider's MX records on this domain. */
   allowMxTakeover?: boolean;
+  /** Called only after a fresh live read confirms a foreign MX/catch-all before overwrite. */
+  authorizeTakeover?: (
+    operation: "provision.mx-takeover" | "provision.catch-all-takeover",
+  ) => Promise<void>;
   /**
    * Domains the owner has ruled out (they serve another mail product). Nothing is
    * mutated for them regardless of the takeover flags.
@@ -41,21 +52,55 @@ async function removeForeignMx(
   db: D1Database,
   client: CloudflareClient,
   domain: Domain,
-  pf: PreflightResult,
+  authorizeTakeover: ProvisionOptions["authorizeTakeover"],
 ): Promise<string[]> {
   const zoneId = domain.cloudflareZoneId;
-  const foreignMx = new Set((pf.conflict?.mxRecords ?? []).map((r) => r.exchange.toLowerCase()));
-  if (foreignMx.size === 0) return [];
-
   const records = await client.listDnsRecords(zoneId, "MX");
-  const doomed = records.filter((r) => r.type === "MX" && foreignMx.has((r.content ?? "").trim().replace(/\.$/, "").toLowerCase()));
-  if (doomed.length === 0) return [];
+  const candidates = records.filter((r) => r.type === "MX" && !assessMx([r]).clearForUs);
+  const removed: string[] = [];
 
-  const removing = doomed.map((r) => ({ id: r.id, type: r.type, name: r.name, content: r.content, priority: Number(r.priority ?? 0) }));
-  await recordProvisioningEvent(db, domain.id, "provision:mx_takeover", "RUNNING", { removing });
-  for (const rec of doomed) await client.deleteDnsRecord(zoneId, rec.id);
-  log.warn("domain_mx_removed", { domain: domain.name, zoneId, count: doomed.length });
-  return doomed.map((r) => `MX ${r.content}`);
+  for (const rec of candidates) {
+    const latest = await client.listDnsRecords(zoneId, "MX");
+    const stillForeign =
+      latest.some((current) => current.id === rec.id) &&
+      assessMx(latest).foreign.some(
+        (current) =>
+          current.exchange.toLowerCase() === rec.content.trim().replace(/\.$/, "").toLowerCase(),
+      );
+    if (!stillForeign) continue;
+    if (!authorizeTakeover)
+      throw forbidden("Unlock with your passkey first", { stepUpRequired: true });
+    await authorizeTakeover("provision.mx-takeover");
+    const removing = [
+      {
+        id: rec.id,
+        type: rec.type,
+        name: rec.name,
+        content: rec.content,
+        priority: Number(rec.priority ?? 0),
+      },
+    ];
+    await recordProvisioningEvent(db, domain.id, "provision:mx_takeover", "RUNNING", { removing });
+    await client.deleteDnsRecord(zoneId, rec.id);
+    removed.push(`MX ${rec.content}`);
+  }
+  if (removed.length)
+    log.warn("domain_mx_removed", { domain: domain.name, zoneId, count: removed.length });
+  return removed;
+}
+
+function isForeignCatchAll(
+  rule: Awaited<ReturnType<CloudflareClient["getCatchAll"]>>,
+  workerName: string,
+): boolean {
+  const action = rule?.actions?.[0];
+  return (
+    !!rule &&
+    rule.enabled !== false &&
+    !!action &&
+    action.type !== "drop" &&
+    !(action.type === "worker" && action.value?.[0] === workerName)
+  );
 }
 
 /**
@@ -74,42 +119,108 @@ export async function provisionDomain(
 ): Promise<ProvisionOutcome> {
   const domain = await getDomainByZoneId(db, zoneId);
   if (!domain) {
-    return outcome(zoneId, "", null, MailStatus.Failed, false, "Domain not synced yet — run Sync first", []);
+    return outcome(
+      zoneId,
+      "",
+      null,
+      MailStatus.Failed,
+      false,
+      "Domain not synced yet — run Sync first",
+      [],
+    );
   }
   const steps: Step[] = [];
 
-  const denied = (opts.denyDomains ?? []).some((d) => d.trim().toLowerCase() === domain.name.toLowerCase());
+  const denied = (opts.denyDomains ?? []).some(
+    (d) => d.trim().toLowerCase() === domain.name.toLowerCase(),
+  );
   if (denied) {
-    await recordProvisioningEvent(db, domain.id, "provision:denied", "BLOCKED", { reason: "excluded by owner" });
-    return outcome(zoneId, domain.name, domain.id, MailStatus.Conflict, false, `${domain.name} is excluded from MailVault management — nothing was changed`, steps);
+    await recordProvisioningEvent(db, domain.id, "provision:denied", "BLOCKED", {
+      reason: "excluded by owner",
+    });
+    return outcome(
+      zoneId,
+      domain.name,
+      domain.id,
+      MailStatus.Conflict,
+      false,
+      `${domain.name} is excluded from MailVault management — nothing was changed`,
+      steps,
+    );
   }
 
   await patchDomainProvisioning(db, zoneId, { mailStatus: MailStatus.Provisioning });
   await recordProvisioningEvent(db, domain.id, "provision:start", "RUNNING");
 
   try {
-    const pf = await preflightZone(client, { zoneId, name: domain.name, status: domain.zoneStatus, type: domain.zoneType }, workerName);
-    const mxTakeover = pf.classification === PreflightClassification.MxConflict && opts.allowMxTakeover === true;
-
-    // Blocking conflicts: MX is removed only on this explicit confirm; a foreign catch-all
-    // only on its own.
-    if (pf.classification === PreflightClassification.MxConflict && !mxTakeover) {
-      await patchDomainProvisioning(db, zoneId, {
-        mailStatus: MailStatus.Conflict,
-        conflictType: ConflictType.Mx,
-        conflictDetails: pf.conflict,
-      });
-      await recordProvisioningEvent(db, domain.id, "preflight:mx_conflict", "CONFLICT", pf.conflict);
-      return outcome(zoneId, domain.name, domain.id, MailStatus.Conflict, false, pf.conflict?.message ?? "MX conflict", steps);
+    const pf = await preflightZone(
+      client,
+      { zoneId, name: domain.name, status: domain.zoneStatus, type: domain.zoneType },
+      workerName,
+    );
+    const hasLivePath = new Set<PreflightClassification>([
+      PreflightClassification.MxConflict,
+      PreflightClassification.CatchAllConflict,
+      PreflightClassification.ReadyToProvision,
+      PreflightClassification.AlreadyConfigured,
+    ]).has(pf.classification);
+    const livePath = hasLivePath ? await verifyDeliveryPath(client, zoneId, workerName) : null;
+    const liveMxConflict = (livePath?.mx.foreign.length ?? 0) > 0;
+    const liveCatchAllConflict = livePath?.foreignCatchAll ?? false;
+    const classification = livePath
+      ? liveMxConflict
+        ? PreflightClassification.MxConflict
+        : liveCatchAllConflict
+          ? PreflightClassification.CatchAllConflict
+          : livePath.routing && livePath.catchAllOurs
+            ? PreflightClassification.AlreadyConfigured
+            : PreflightClassification.ReadyToProvision
+      : pf.classification;
+    const mxTakeover =
+      classification === PreflightClassification.MxConflict && opts.allowMxTakeover === true;
+    if (
+      ((liveMxConflict && opts.allowMxTakeover) ||
+        (liveCatchAllConflict && opts.allowCatchAllTakeover)) &&
+      !opts.authorizeTakeover
+    ) {
+      throw forbidden("Unlock with your passkey first", { stepUpRequired: true });
     }
-    if (pf.classification === PreflightClassification.CatchAllConflict && !opts.allowCatchAllTakeover) {
+    if (
+      (liveMxConflict && !opts.allowMxTakeover) ||
+      (liveCatchAllConflict && !opts.allowCatchAllTakeover)
+    ) {
+      const conflict: ConflictDetails = liveMxConflict
+        ? {
+            type: ConflictType.Mx,
+            message: `Existing MX detected (${livePath?.mx.providers.join(", ") || "unrecognized provider"}).`,
+            mxRecords: livePath?.mx.foreign.map((r) => ({
+              exchange: r.exchange,
+              priority: r.priority,
+            })),
+          }
+        : {
+            type: ConflictType.CatchAll,
+            message: "A foreign catch-all rule is still configured.",
+            catchAll: {
+              actionType: livePath?.catchAllType ?? undefined,
+              destination: livePath?.catchAllValue ?? undefined,
+            },
+          };
       await patchDomainProvisioning(db, zoneId, {
         mailStatus: MailStatus.Conflict,
-        conflictType: ConflictType.CatchAll,
-        conflictDetails: pf.conflict,
+        conflictType: conflict.type,
+        conflictDetails: conflict,
       });
-      await recordProvisioningEvent(db, domain.id, "preflight:catch_all_conflict", "CONFLICT", pf.conflict);
-      return outcome(zoneId, domain.name, domain.id, MailStatus.Conflict, false, pf.conflict?.message ?? "Catch-all conflict", steps);
+      await recordProvisioningEvent(db, domain.id, "provision:live_conflict", "CONFLICT", conflict);
+      return outcome(
+        zoneId,
+        domain.name,
+        domain.id,
+        MailStatus.Conflict,
+        false,
+        conflict.message,
+        steps,
+      );
     }
 
     // Allow-list gate: mutate ONLY for classifications we have positively cleared, plus the
@@ -118,9 +229,10 @@ export async function provisionDomain(
     // read — stops here. A token that cannot *see* the zone must never be allowed to
     // *change* it (section 7/9).
     const provisionable =
-      pf.classification === PreflightClassification.ReadyToProvision ||
-      pf.classification === PreflightClassification.AlreadyConfigured ||
-      (pf.classification === PreflightClassification.CatchAllConflict && opts.allowCatchAllTakeover === true) ||
+      classification === PreflightClassification.ReadyToProvision ||
+      classification === PreflightClassification.AlreadyConfigured ||
+      (classification === PreflightClassification.CatchAllConflict &&
+        opts.allowCatchAllTakeover === true) ||
       mxTakeover;
     if (!provisionable) {
       await patchDomainProvisioning(db, zoneId, {
@@ -128,37 +240,106 @@ export async function provisionDomain(
         conflictType: pf.conflict?.type ?? ConflictType.None,
         conflictDetails: pf.conflict ?? null,
       });
-      await recordProvisioningEvent(db, domain.id, "provision:blocked", "BLOCKED", { classification: pf.classification });
-      return outcome(zoneId, domain.name, domain.id, MailStatus.Failed, false, `Not safe to provision (${pf.classification})`, steps);
+      await recordProvisioningEvent(db, domain.id, "provision:blocked", "BLOCKED", {
+        classification,
+      });
+      return outcome(
+        zoneId,
+        domain.name,
+        domain.id,
+        MailStatus.Failed,
+        false,
+        `Not safe to provision (${classification})`,
+        steps,
+      );
     }
 
     if (mxTakeover) {
-      const removed = await removeForeignMx(db, client, domain, pf);
-      steps.push({ step: "mx_takeover", ok: true, detail: removed.length ? `removed ${removed.join("; ")}` : "nothing to remove" });
+      const removed = await removeForeignMx(db, client, domain, opts.authorizeTakeover);
+      steps.push({
+        step: "mx_takeover",
+        ok: true,
+        detail: removed.length ? `removed ${removed.join("; ")}` : "nothing to remove",
+      });
     }
 
-    const skipDns = pf.classification === PreflightClassification.AlreadyConfigured;
+    const skipDns = classification === PreflightClassification.AlreadyConfigured;
 
     // ensureEmailRoutingDns — adds+locks CF MX/SPF + enables. Skipped when the zone
     // already publishes Cloudflare's routing MX: re-enabling is a redundant mutation and
     // a needless write against a live zone.
     let routingOn = skipDns;
     if (!routingOn) {
-      const mxNow = await client.listDnsRecords(zoneId, "MX");
+      let mxNow = await client.listDnsRecords(zoneId, "MX");
+      if (assessMx(mxNow).foreign.length > 0) {
+        if (!opts.allowMxTakeover) {
+          return outcome(
+            zoneId,
+            domain.name,
+            domain.id,
+            MailStatus.Conflict,
+            false,
+            "Foreign MX records appeared during provisioning",
+            steps,
+          );
+        }
+        await removeForeignMx(db, client, domain, opts.authorizeTakeover);
+        mxNow = await client.listDnsRecords(zoneId, "MX");
+        if (assessMx(mxNow).foreign.length > 0) {
+          return outcome(
+            zoneId,
+            domain.name,
+            domain.id,
+            MailStatus.Conflict,
+            false,
+            "MX records changed during takeover; nothing further was changed",
+            steps,
+          );
+        }
+      }
       routingOn = assessMx(mxNow).cloudflareRouting > 0;
     }
 
     if (routingOn) {
-      steps.push({ step: "email_routing_dns", ok: true, detail: skipDns ? "already enabled" : "mx present" });
+      steps.push({
+        step: "email_routing_dns",
+        ok: true,
+        detail: skipDns ? "already enabled" : "mx present",
+      });
     } else {
       await client.enableEmailRouting(zoneId);
       steps.push({ step: "email_routing_dns", ok: true });
     }
     await patchDomainProvisioning(db, zoneId, { mailStatus: MailStatus.Provisioning });
 
+    const currentCatchAll = await client.getCatchAll(zoneId);
+    if (isForeignCatchAll(currentCatchAll, workerName)) {
+      if (!opts.allowCatchAllTakeover) {
+        return outcome(
+          zoneId,
+          domain.name,
+          domain.id,
+          MailStatus.Conflict,
+          false,
+          "A foreign catch-all appeared during provisioning",
+          steps,
+        );
+      }
+      if (!opts.authorizeTakeover)
+        throw forbidden("Unlock with your passkey first", { stepUpRequired: true });
+      await opts.authorizeTakeover("provision.catch-all-takeover");
+    }
+
     // ensureCatchAllWorkerRule — PUT catch_all -> our worker. Idempotent (sets ours).
     await client.setCatchAllWorker(zoneId, workerName);
-    steps.push({ step: "catch_all_worker", ok: true, detail: opts.allowCatchAllTakeover && pf.classification === PreflightClassification.CatchAllConflict ? "took over foreign catch-all" : null });
+    steps.push({
+      step: "catch_all_worker",
+      ok: true,
+      detail:
+        opts.allowCatchAllTakeover && classification === PreflightClassification.CatchAllConflict
+          ? "took over foreign catch-all"
+          : null,
+    });
     await patchDomainProvisioning(db, zoneId, { mailStatus: MailStatus.Verifying });
 
     // verify (section 33) — do not claim READY off a single 200. Re-read the whole
@@ -166,7 +347,11 @@ export async function provisionDomain(
     const verified = await verifyDeliveryPath(client, zoneId, workerName);
     const routingOk = verified.routing;
     const catchAllOk = verified.catchAllOurs;
-    steps.push({ step: "verify", ok: routingOk && catchAllOk, detail: `routing=${routingOk} catch_all=${catchAllOk}` });
+    steps.push({
+      step: "verify",
+      ok: routingOk && catchAllOk,
+      detail: `routing=${routingOk} catch_all=${catchAllOk}`,
+    });
 
     const routingStatus = routingOk ? RoutingStatus.Ready : RoutingStatus.Misconfigured;
     const catchAllStatus = catchAllOk ? CatchAllStatus.Ours : CatchAllStatus.Foreign;
@@ -184,10 +369,33 @@ export async function provisionDomain(
       return outcome(zoneId, domain.name, domain.id, MailStatus.Ready, true, null, steps);
     }
 
-    await patchDomainProvisioning(db, zoneId, { mailStatus: MailStatus.Failed, routingStatus, catchAllStatus });
+    await patchDomainProvisioning(db, zoneId, {
+      mailStatus: MailStatus.Failed,
+      routingStatus,
+      catchAllStatus,
+    });
     await recordProvisioningEvent(db, domain.id, "provision:verify_failed", "FAILED");
-    return outcome(zoneId, domain.name, domain.id, MailStatus.Failed, false, "Post-provision verification failed", steps);
+    return outcome(
+      zoneId,
+      domain.name,
+      domain.id,
+      MailStatus.Failed,
+      false,
+      "Post-provision verification failed",
+      steps,
+    );
   } catch (err) {
+    if (
+      err instanceof Error &&
+      "status" in err &&
+      err.status === 403 &&
+      "details" in err &&
+      typeof err.details === "object" &&
+      err.details !== null &&
+      "stepUpRequired" in err.details &&
+      err.details.stepUpRequired === true
+    )
+      throw err;
     const kind = err instanceof CloudflareApiError ? err.kind : "error";
     const message = err instanceof CloudflareApiError ? err.message : "Provisioning error";
     if (err instanceof CloudflareApiError) {
@@ -213,7 +421,8 @@ export async function provisionDomain(
     // same code it uses for a missing permission — when it is not. On 2026-09-20 a token
     // that deleted DNS records on a zone was still refused `enable` on that same zone, so
     // the permission itself can be the gap: name both, and say what happens to the MX.
-    const enablePath = err instanceof CloudflareApiError && /\/email\/routing\/(enable|dns)$/.test(err.path ?? "");
+    const enablePath =
+      err instanceof CloudflareApiError && /\/email\/routing\/(enable|dns)$/.test(err.path ?? "");
     const mxAlreadyGone = steps.some((s) => s.step === "mx_takeover");
     const actionable =
       enablePath && (kind === "permission" || kind === "auth")
@@ -249,11 +458,22 @@ function outcome(
  * (inactive zone, unsupported type, permission error) are deliberately absent: an
  * unreadable zone must not be rewritten into a different state.
  */
-const PREFLIGHT_VERDICT: Partial<Record<PreflightClassification, { status: MailStatus; conflict: ConflictType }>> = {
+const PREFLIGHT_VERDICT: Partial<
+  Record<PreflightClassification, { status: MailStatus; conflict: ConflictType }>
+> = {
   [PreflightClassification.MxConflict]: { status: MailStatus.Conflict, conflict: ConflictType.Mx },
-  [PreflightClassification.CatchAllConflict]: { status: MailStatus.Conflict, conflict: ConflictType.CatchAll },
-  [PreflightClassification.ReadyToProvision]: { status: MailStatus.Preflight, conflict: ConflictType.None },
-  [PreflightClassification.AlreadyConfigured]: { status: MailStatus.Ready, conflict: ConflictType.None },
+  [PreflightClassification.CatchAllConflict]: {
+    status: MailStatus.Conflict,
+    conflict: ConflictType.CatchAll,
+  },
+  [PreflightClassification.ReadyToProvision]: {
+    status: MailStatus.Preflight,
+    conflict: ConflictType.None,
+  },
+  [PreflightClassification.AlreadyConfigured]: {
+    status: MailStatus.Ready,
+    conflict: ConflictType.None,
+  },
 };
 
 /**
@@ -295,7 +515,11 @@ export async function preflightMany(
         checkedAt: new Date().toISOString(),
       } as PreflightResult;
     }
-    const pf = await preflightZone(client, { zoneId, name: domain.name, status: domain.zoneStatus, type: domain.zoneType }, workerName);
+    const pf = await preflightZone(
+      client,
+      { zoneId, name: domain.name, status: domain.zoneStatus, type: domain.zoneType },
+      workerName,
+    );
     await rememberVerdict(db, domain, pf);
     return { ...pf, domainId: domain.id };
   });
@@ -309,7 +533,9 @@ export async function provisionMany(
   workerName: string,
   opts: ProvisionOptions = {},
 ): Promise<ProvisionOutcome[]> {
-  return mapWithConcurrency(zoneIds, 3, (zoneId) => provisionDomain(db, client, zoneId, workerName, opts));
+  return mapWithConcurrency(zoneIds, 3, (zoneId) =>
+    provisionDomain(db, client, zoneId, workerName, opts),
+  );
 }
 
 export function newRunId(): string {

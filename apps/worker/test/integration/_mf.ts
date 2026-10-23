@@ -36,16 +36,34 @@ let cached: TestBindings | undefined;
 /** Applies every migration in filename order, like `wrangler d1 migrations apply`. */
 function loadSchema(): string[] {
   const dir = new URL("../../migrations/", import.meta.url);
-  const files = readdirSync(dir).filter((f) => /^\d[\w.-]*\.sql$/.test(f)).sort();
-  return files.flatMap((file) =>
-    readFileSync(new URL(file, dir), "utf8")
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("--"))
-      .join("\n")
-      .split(";")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0 && !/^PRAGMA/i.test(s)),
-  );
+  const files = readdirSync(dir)
+    .filter((f) => /^\d[\w.-]*\.sql$/.test(f))
+    .sort();
+  return files.flatMap((file) => {
+    const statements: string[] = [];
+    let pending = "";
+    let inTrigger = false;
+    for (const line of readFileSync(new URL(file, dir), "utf8").split("\n")) {
+      if (line.trim().startsWith("--")) continue;
+      if (!pending.trim() && /^\s*CREATE\s+(?:TEMP(?:ORARY)?\s+)?TRIGGER\b/i.test(line)) {
+        inTrigger = true;
+      }
+      pending += `${line}\n`;
+      if (inTrigger) {
+        if (/^\s*END\s*;\s*$/.test(line)) {
+          statements.push(pending.trim().replace(/;$/, ""));
+          pending = "";
+          inTrigger = false;
+        }
+        continue;
+      }
+      const pieces = pending.split(";");
+      pending = pieces.pop() ?? "";
+      statements.push(...pieces.map((statement) => statement.trim()).filter(Boolean));
+    }
+    if (pending.trim()) statements.push(pending.trim());
+    return statements.filter((statement) => !/^PRAGMA/i.test(statement));
+  });
 }
 
 export async function getTestBindings(): Promise<TestBindings> {
@@ -89,7 +107,13 @@ export async function getTestBindings(): Promise<TestBindings> {
     ALLOWED_EMAILS: "",
   } as unknown as Env;
 
-  const created: TestBindings = { env, db, bucket, queue, dispose: async () => void (await mf.dispose()) };
+  const created: TestBindings = {
+    env,
+    db,
+    bucket,
+    queue,
+    dispose: async () => void (await mf.dispose()),
+  };
   cached = created;
   return created;
 }

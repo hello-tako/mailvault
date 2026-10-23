@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ApiClientError } from "../lib/api";
 import { formatBytes, fullTime } from "../lib/format";
-import { SEND_LIMITS, type MessageDetail, type RecipientSuggestion, type SendOutcome } from "@mailvault/shared";
+import {
+  SEND_LIMITS,
+  type MessageDetail,
+  type RecipientSuggestion,
+  type SendOutcome,
+} from "@mailvault/shared";
 import { t } from "../lib/i18n";
 import { clearDraft, draftIsBlank, readDraft, saveDraft } from "../lib/drafts";
 import type { SendableAlias } from "../lib/useOutbox";
@@ -18,6 +23,7 @@ const ERROR_KEYS: Record<string, string> = {
   TOO_MANY_RECIPIENTS: "send.err.tooMany",
   DAILY_LIMIT: "send.err.dailyLimit",
   SPOOFED_PARENT: "send.err.spoofedParent",
+  UNVERIFIED_PARENT: "send.err.unverifiedParent",
   EMPTY_BODY: "send.err.empty",
   TOO_LARGE: "send.err.tooLarge",
   BAD_ADDRESS: "send.err.badAddress",
@@ -75,7 +81,6 @@ function wireSize(text: string, files: PendingFile[]): number {
   return Math.ceil((payload / 3) * 4);
 }
 
-
 /**
  * The original, folded into the reply the way any mail client does it.
  *
@@ -95,7 +100,6 @@ function quoteOf(m: MessageDetail, max = 6000): string {
     .join("\n");
   return `\n\n── ${t("composer.quotedFrom", { who, when })} ──\n${quoted}`;
 }
-
 
 /**
  * One recipient line, completed from this mailbox's own correspondence.
@@ -124,7 +128,8 @@ function RecipientField({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   // Everything after the last separator is the token worth completing.
-  const tailStart = Math.max(value.lastIndexOf(","), value.lastIndexOf(";"), value.lastIndexOf("\n")) + 1;
+  const tailStart =
+    Math.max(value.lastIndexOf(","), value.lastIndexOf(";"), value.lastIndexOf("\n")) + 1;
   const tail = value.slice(tailStart);
   const token = tail.trim();
 
@@ -216,8 +221,12 @@ function RecipientField({
               }}
             >
               <span className="recip-name">{it.name ?? it.address}</span>
-              {it.name && it.name !== it.address ? <span className="recip-addr faint">{it.address}</span> : null}
-              {it.outgoing ? <span className="recip-tag faint">{t("composer.youWrote")}</span> : null}
+              {it.name && it.name !== it.address ? (
+                <span className="recip-addr faint">{it.address}</span>
+              ) : null}
+              {it.outgoing ? (
+                <span className="recip-tag faint">{t("composer.youWrote")}</span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -274,6 +283,7 @@ export function Composer({
     return () => clearTimeout(timer);
   }, [isReply, from, to, cc, subject, text]);
   const body = useRef<HTMLTextAreaElement>(null);
+  const sendKey = useRef(crypto.randomUUID());
 
   useEffect(() => {
     body.current?.focus();
@@ -288,7 +298,8 @@ export function Composer({
   const recipientCount = splitAddresses(to).length + splitAddresses(cc).length;
   // The address the message really leaves under. It is the alias itself unless the domain was
   // pointed at one of its zone's sending subdomains, and the owner is told either way.
-  const leavesAs = (address: string) => sendableAliases.find((a) => a.address === address)?.sendingAddress ?? address;
+  const leavesAs = (address: string) =>
+    sendableAliases.find((a) => a.address === address)?.sendingAddress ?? address;
   const leaving = leavesAs(isReply ? replyTo.aliasAddress : from);
   const throughSubdomain = leaving !== (isReply ? replyTo.aliasAddress : from);
   const total = wireSize(text, files);
@@ -310,14 +321,17 @@ export function Composer({
     // Cleared first, or choosing the same file again after removing it would be no change.
     e.target.value = "";
     const room = SEND_LIMITS.maxAttachments - files.length;
-    if (picked.length > room) setError(t("composer.tooManyFiles", { n: SEND_LIMITS.maxAttachments }));
+    if (picked.length > room)
+      setError(t("composer.tooManyFiles", { n: SEND_LIMITS.maxAttachments }));
     const accepted: PendingFile[] = [];
     for (const f of picked.slice(0, Math.max(room, 0))) {
       // A file larger than a whole message can never be sent, and reading it into base64 to
       // find that out would freeze the tab. Everything else is kept and counted against the
       // budget below, which is where a message made of several near-limit files is caught.
       if (f.size > SEND_LIMITS.maxTotalBytes) {
-        setError(t("composer.fileTooLarge", { name: f.name, max: formatBytes(SEND_LIMITS.maxTotalBytes) }));
+        setError(
+          t("composer.fileTooLarge", { name: f.name, max: formatBytes(SEND_LIMITS.maxTotalBytes) }),
+        );
         continue;
       }
       accepted.push(await readAsBase64(f));
@@ -333,15 +347,22 @@ export function Composer({
     const attachments = files.map((f) => ({ filename: f.name, type: f.type, content: f.content }));
     try {
       const outcome = isReply
-        ? await api.reply(replyTo.id, { text, ...(attachments.length > 0 ? { attachments } : {}) })
-        : await api.compose({
-            fromAddress: from,
-            to: splitAddresses(to),
-            ...(splitAddresses(cc).length > 0 ? { cc: splitAddresses(cc) } : {}),
-            subject,
-            text,
-            ...(attachments.length > 0 ? { attachments } : {}),
-          });
+        ? await api.reply(
+            replyTo.id,
+            { text, ...(attachments.length > 0 ? { attachments } : {}) },
+            sendKey.current,
+          )
+        : await api.compose(
+            {
+              fromAddress: from,
+              to: splitAddresses(to),
+              ...(splitAddresses(cc).length > 0 ? { cc: splitAddresses(cc) } : {}),
+              subject,
+              text,
+              ...(attachments.length > 0 ? { attachments } : {}),
+            },
+            sendKey.current,
+          );
       if (!isReply) clearDraft();
       onSent(outcome);
     } catch (err) {
@@ -381,20 +402,41 @@ export function Composer({
                     ))}
                   </select>
                   {throughSubdomain ? (
-                    <div className="field-hint">{t("composer.leavesVia", { sending: leaving, alias: from })}</div>
+                    <div className="field-hint">
+                      {t("composer.leavesVia", { sending: leaving, alias: from })}
+                    </div>
                   ) : null}
                 </>
               )}
             </div>
-            <RecipientField id="compose-to" label={t("composer.to")} hint="someone@example.com" value={to} onPick={setTo} />
-            {recipientCount > 0 ? <div className="field-hint">{t("composer.recipients", { n: recipientCount })}</div> : null}
+            <RecipientField
+              id="compose-to"
+              label={t("composer.to")}
+              hint="someone@example.com"
+              value={to}
+              onPick={setTo}
+            />
+            {recipientCount > 0 ? (
+              <div className="field-hint">{t("composer.recipients", { n: recipientCount })}</div>
+            ) : null}
             <details className="composer-cc">
               <summary>{t("composer.cc")}</summary>
-              <RecipientField id="compose-cc" label={t("composer.cc")} hint="someone-else@example.com" value={cc} onPick={setCc} />
+              <RecipientField
+                id="compose-cc"
+                label={t("composer.cc")}
+                hint="someone-else@example.com"
+                value={cc}
+                onPick={setCc}
+              />
             </details>
             <div className="field">
               <label htmlFor="compose-subject">{t("composer.subject")}</label>
-              <input id="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200} />
+              <input
+                id="compose-subject"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                maxLength={200}
+              />
             </div>
           </>
         )}
@@ -419,8 +461,14 @@ export function Composer({
           <input id="compose-files" type="file" multiple onChange={onPickFiles} />
           <div className="field-hint">
             {files.length > 0
-              ? t("composer.attachBudget", { size: formatBytes(total), max: formatBytes(SEND_LIMITS.maxTotalBytes) })
-              : t("composer.attachHint", { n: SEND_LIMITS.maxAttachments, max: formatBytes(SEND_LIMITS.maxTotalBytes) })}
+              ? t("composer.attachBudget", {
+                  size: formatBytes(total),
+                  max: formatBytes(SEND_LIMITS.maxTotalBytes),
+                })
+              : t("composer.attachHint", {
+                  n: SEND_LIMITS.maxAttachments,
+                  max: formatBytes(SEND_LIMITS.maxTotalBytes),
+                })}
           </div>
           {files.length > 0 ? (
             <ul className="file-list">
@@ -440,7 +488,9 @@ export function Composer({
               ))}
             </ul>
           ) : null}
-          {overBudget ? <div className="field-hint is-error">{t("composer.overBudget")}</div> : null}
+          {overBudget ? (
+            <div className="field-hint is-error">{t("composer.overBudget")}</div>
+          ) : null}
         </div>
 
         {bindingMissing && (
@@ -462,7 +512,12 @@ export function Composer({
             <button type="button" onClick={onClose}>
               {t("common.cancel")}
             </button>
-            <button type="submit" className="primary" disabled={!canSend || sendableAliases.length === 0} aria-busy={busy}>
+            <button
+              type="submit"
+              className="primary"
+              disabled={!canSend || sendableAliases.length === 0}
+              aria-busy={busy}
+            >
               {t(busy ? "composer.sending" : "composer.send")}
             </button>
           </div>

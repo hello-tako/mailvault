@@ -1,0 +1,7 @@
+{
+  "name": "mailvault-mailauth-compat",
+  "main": "mailauth-harness.ts",
+  "compatibility_date": "2026-07-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+}

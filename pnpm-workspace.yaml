@@ -6,3 +6,5 @@ onlyBuiltDependencies:
   - esbuild
   - workerd
   - sharp
+patchedDependencies:
+  mailauth@7.1.1: patches/mailauth@7.1.1.patch

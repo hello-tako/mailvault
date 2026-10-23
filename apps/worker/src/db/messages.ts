@@ -1,3 +1,4 @@
+import { visibleMessageSql } from "./visibility";
 import type {
   Attachment,
   AuthVerdict,
@@ -9,7 +10,11 @@ import type {
   SendStatus,
   VerificationLink,
 } from "@mailvault/shared";
-import { MessageDirection, parseSearchQuery, type MessageCounters } from "@mailvault/shared";
+import {
+  MessageDirection,
+  parseSearchQuery,
+  type MessageCounters,
+} from "@mailvault/shared";
 import { newId, nowIso } from "../lib/util";
 import { listRecipients } from "./recipients";
 import { parseJson, toMessageAuth, toMessageSummary } from "./mappers";
@@ -36,6 +41,7 @@ export type ListInput = Omit<MessageListQuery, "direction" | "threaded" | "befor
 };
 
 export interface InsertMessageInput {
+  id?: string;
   domainId: string;
   aliasId: string | null;
   providerMessageId: string | null;
@@ -47,6 +53,7 @@ export interface InsertMessageInput {
   subject: string | null;
   preview: string | null;
   receivedAt: string;
+  headerDate?: string | null;
   rawSize: number;
   rawR2Key: string;
   parsedR2Key: string | null;
@@ -87,102 +94,71 @@ function changes(res: { meta?: unknown }): number {
   return Number((res.meta as { changes?: number } | undefined)?.changes ?? 0);
 }
 
-function isUniqueViolation(err: unknown): boolean {
-  return err instanceof Error && /UNIQUE constraint failed: messages.dedupe_key/i.test(err.message);
-}
-
-/** The insert plus the id it will insert, so callers can batch it with rows that name that id. */
-function insertMessageStatement(db: D1Database, m: InsertMessageInput): [D1PreparedStatement, string] {
-  const id = newId();
-  const stmt = db
-    .prepare(
-      `INSERT INTO messages (
+/** Returns the new message id, or null when the dedupe_key already existed. */
+export async function insertMessage(db: D1Database, m: InsertMessageInput): Promise<string | null> {
+  const id = m.id ?? newId();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO messages (
           id, domain_id, alias_id, provider_message_id, dedupe_key,
           envelope_from, envelope_to, header_from, header_to, subject, preview,
           received_at, raw_size, raw_r2_key, parsed_r2_key, has_attachments,
           attachment_count, is_read, extracted_codes_json, verification_links_json,
           auth_verdict, auth_json, created_at,
           direction, thread_root_id, in_reply_to, references_json, reply_to, cc,
-          send_status, send_error, list_unsubscribe, list_unsubscribe_post
+          send_status, send_error, list_unsubscribe, list_unsubscribe_post, header_date
         ) VALUES (
           ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
-          ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33
+          ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34
         )`,
-    )
-    .bind(
-      id,
-      m.domainId,
-      m.aliasId,
-      m.providerMessageId,
-      m.dedupeKey,
-      m.envelopeFrom,
-      m.envelopeTo,
-      m.headerFrom,
-      m.headerTo,
-      m.subject,
-      m.preview,
-      m.receivedAt,
-      m.rawSize,
-      m.rawR2Key,
-      m.parsedR2Key,
-      m.hasAttachments ? 1 : 0,
-      m.attachmentCount,
-      // Sent mail is written as read: the owner just composed it.
-      m.direction === MessageDirection.Out ? 1 : 0,
-      JSON.stringify(m.codes),
-      JSON.stringify(m.links),
-      m.authVerdict,
-      m.auth ? JSON.stringify(m.auth) : null,
-      nowIso(),
-      m.direction ?? MessageDirection.In,
-      // A message that starts a conversation is that conversation. Filled in by the
-      // caller when the thread is known, and back-filled below when it is not.
-      m.threadRootId ?? id,
-      m.inReplyTo ?? null,
-      m.references && m.references.length > 0 ? JSON.stringify(m.references) : null,
-      m.replyTo ?? null,
-      m.cc ?? null,
-      m.sendStatus ?? null,
-      m.sendError ?? null,
-      m.listUnsubscribe ?? null,
-      // The header is stored as a flag rather than its text: the only value it may hold is
-      // the one that means one-click, so a stored copy of the sender's wording adds nothing.
-      m.oneClickUnsubscribe ? "List-Unsubscribe=One-Click" : null,
-    );
-  return [stmt, id];
-}
-
-/** Returns the new message id, or null when the dedupe_key already existed. */
-export async function insertMessage(db: D1Database, m: InsertMessageInput): Promise<string | null> {
-  const [stmt, id] = insertMessageStatement(db, m);
-  try {
-    await stmt.run();
-    correspondentsCache = null;
+      )
+      .bind(
+        id,
+        m.domainId,
+        m.aliasId,
+        m.providerMessageId,
+        m.dedupeKey,
+        m.envelopeFrom,
+        m.envelopeTo,
+        m.headerFrom,
+        m.headerTo,
+        m.subject,
+        m.preview,
+        m.receivedAt,
+        m.rawSize,
+        m.rawR2Key,
+        m.parsedR2Key,
+        m.hasAttachments ? 1 : 0,
+        m.attachmentCount,
+        // Sent mail is written as read: the owner just composed it.
+        m.direction === MessageDirection.Out ? 1 : 0,
+        JSON.stringify(m.codes),
+        JSON.stringify(m.links),
+        m.authVerdict,
+        m.auth ? JSON.stringify(m.auth) : null,
+        nowIso(),
+        m.direction ?? MessageDirection.In,
+        // A message that starts a conversation is that conversation. Filled in by the
+        // caller when the thread is known, and back-filled below when it is not.
+        m.threadRootId ?? id,
+        m.inReplyTo ?? null,
+        m.references && m.references.length > 0 ? JSON.stringify(m.references) : null,
+        m.replyTo ?? null,
+        m.cc ?? null,
+        m.sendStatus ?? null,
+        m.sendError ?? null,
+        m.listUnsubscribe ?? null,
+        // The header is stored as a flag rather than its text: the only value it may hold is
+        // the one that means one-click, so a stored copy of the sender's wording adds nothing.
+        m.oneClickUnsubscribe ? "List-Unsubscribe=One-Click" : null,
+        m.headerDate ?? null,
+      )
+      .run();
     return id;
   } catch (err) {
-    if (isUniqueViolation(err)) return null;
-    throw err;
-  }
-}
-
-/**
- * The whole commit in one batch: message row, attachment rows and FTS entry land
- * atomically, so a failure between them can no longer leave a message without its files
- * or its search entry. Dedupe behaves exactly like `insertMessage`.
- */
-export async function insertMessageWithDependents(
-  db: D1Database,
-  m: InsertMessageInput,
-  attachments: InsertAttachmentInput[],
-  ftsText: { subject: string | null; preview: string | null; sender: string | null },
-): Promise<string | null> {
-  const [stmt, id] = insertMessageStatement(db, m);
-  try {
-    await db.batch([stmt, ...attachmentStatements(db, id, attachments), ...indexStatements(db, id, ftsText)]);
-    correspondentsCache = null;
-    return id;
-  } catch (err) {
-    if (isUniqueViolation(err)) return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE constraint failed: messages.dedupe_key/i.test(msg)) return null;
     throw err;
   }
 }
@@ -205,7 +181,7 @@ export async function findThreadRoot(
   const row = await db
     .prepare(
       `SELECT COALESCE(thread_root_id, id) AS root
-       FROM messages WHERE provider_message_id IN (${placeholders})
+       FROM messages m WHERE ${visibleMessageSql()} AND provider_message_id IN (${placeholders})
        ORDER BY received_at DESC LIMIT 1`,
     )
     .bind(...ids)
@@ -221,7 +197,7 @@ export async function listThread(db: D1Database, rootId: string): Promise<Messag
        FROM messages m
        LEFT JOIN aliases a ON a.id = m.alias_id
        LEFT JOIN domains d ON d.id = m.domain_id
-       WHERE m.thread_root_id = ?1 OR m.id = ?1
+       WHERE (m.thread_root_id = ?1 OR m.id = ?1) AND ${visibleMessageSql()}
        ORDER BY m.received_at ASC, m.id ASC`,
     )
     .bind(rootId)
@@ -236,8 +212,14 @@ export async function listThread(db: D1Database, rootId: string): Promise<Messag
  */
 export async function countSentSince(db: D1Database, sinceIso: string): Promise<number> {
   const row = await db
-    .prepare(`SELECT COUNT(*) AS c FROM messages WHERE direction = 'OUT' AND received_at >= ?1`)
-    .bind(sinceIso)
+    .prepare(
+      `SELECT
+      (SELECT COUNT(*) FROM outbound_jobs WHERE created_at >= ?1 AND (quota_charged=1 OR (state='STAGING' AND lease_expires_at > ?2))) +
+      (SELECT COUNT(*) FROM messages m WHERE direction='OUT' AND received_at >= ?1
+       AND COALESCE(send_status,'QUEUED') NOT IN ('FAILED','SUPPRESSED')
+       AND NOT EXISTS(SELECT 1 FROM outbound_jobs j WHERE j.message_id=m.id)) AS c`,
+    )
+    .bind(sinceIso, nowIso())
     .first<{ c: number }>();
   return Number(row?.c ?? 0);
 }
@@ -246,25 +228,19 @@ export async function countSentSince(db: D1Database, sinceIso: string): Promise<
  * Keep the search index in step with a message. Delete-then-insert so a redelivered or
  * re-indexed message cannot leave duplicate index rows behind.
  */
-export function indexStatements(
-  db: D1Database,
-  messageId: string,
-  text: { subject: string | null; preview: string | null; sender: string | null },
-): D1PreparedStatement[] {
-  return [
-    db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(messageId),
-    db
-      .prepare(`INSERT INTO messages_fts (message_id, subject, preview, sender) VALUES (?1,?2,?3,?4)`)
-      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
-  ];
-}
-
 export async function indexMessage(
   db: D1Database,
   messageId: string,
   text: { subject: string | null; preview: string | null; sender: string | null },
 ): Promise<void> {
-  await db.batch(indexStatements(db, messageId, text));
+  await db.batch([
+    db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(messageId),
+    db
+      .prepare(
+        `INSERT INTO messages_fts (message_id, subject, preview, sender) VALUES (?1,?2,?3,?4)`,
+      )
+      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
+  ]);
 }
 
 export async function dedupeKeyExists(db: D1Database, dedupeKey: string): Promise<boolean> {
@@ -275,29 +251,32 @@ export async function dedupeKeyExists(db: D1Database, dedupeKey: string): Promis
   return !!row;
 }
 
-export function attachmentStatements(
-  db: D1Database,
-  messageId: string,
-  attachments: InsertAttachmentInput[],
-): D1PreparedStatement[] {
-  const now = nowIso();
-  return attachments.map((a) =>
-    db
-      .prepare(
-        `INSERT INTO attachments (id, message_id, filename, safe_filename, content_type, size, r2_key, content_id, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)`,
-      )
-      .bind(a.id ?? newId(), messageId, a.filename, a.safeFilename, a.contentType, a.size, a.r2Key, a.contentId, now),
-  );
-}
-
 export async function insertAttachments(
   db: D1Database,
   messageId: string,
   attachments: InsertAttachmentInput[],
 ): Promise<void> {
   if (attachments.length === 0) return;
-  await db.batch(attachmentStatements(db, messageId, attachments));
+  const now = nowIso();
+  const stmts = attachments.map((a) =>
+    db
+      .prepare(
+        `INSERT INTO attachments (id, message_id, filename, safe_filename, content_type, size, r2_key, content_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO NOTHING`,
+      )
+      .bind(
+        a.id ?? newId(),
+        messageId,
+        a.filename,
+        a.safeFilename,
+        a.contentType,
+        a.size,
+        a.r2Key,
+        a.contentId,
+        now,
+      ),
+  );
+  await db.batch(stmts);
 }
 
 /**
@@ -316,7 +295,7 @@ export function ftsMatch(raw: string, maxWords = 8): string {
 }
 
 function buildListFilters(query: ListInput): { where: string; params: unknown[]; rank: string } {
-  const clauses: string[] = [];
+  const clauses: string[] = [visibleMessageSql()];
   const params: unknown[] = [];
   const push = (val: unknown) => {
     params.push(val);
@@ -357,7 +336,8 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
   if (intent.after) clauses.push(`m.received_at >= ?${push(intent.after)}`);
   if (intent.before) clauses.push(`m.received_at <= ?${push(intent.before)}`);
   if (intent.hasAttachment) clauses.push("m.has_attachments = 1");
-  if (intent.hasCode) clauses.push("(m.extracted_codes_json IS NOT NULL AND m.extracted_codes_json <> '[]')");
+  if (intent.hasCode)
+    clauses.push("(m.extracted_codes_json IS NOT NULL AND m.extracted_codes_json <> '[]')");
   // An address operator matches anywhere the address can be written, including the alias it
   // arrived at: `from:` on a shared alias is usually a search for the person behind it.
   for (const [raw, columns] of [
@@ -366,11 +346,14 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
   ] as const) {
     if (!raw) continue;
     const p = push(`%${raw}%`);
-    clauses.push(`(${columns.map((col) => `lower(COALESCE(${col}, '')) LIKE ?${p}`).join(" OR ")})`);
+    clauses.push(
+      `(${columns.map((col) => `lower(COALESCE(${col}, '')) LIKE ?${p}`).join(" OR ")})`,
+    );
   }
 
   let rank = "0";
-  if (intent.text) {    // Text comes from the FTS index; codes and alias text from LIKE, so searching an
+  if (intent.text) {
+    // Text comes from the FTS index; codes and alias text from LIKE, so searching an
     // address or an OTP still finds mail stored before the index existed. A query with no
     // usable words produces an empty MATCH, which FTS5 rejects — so the index is only
     // consulted when there is something to look for in it.
@@ -387,7 +370,9 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
       // bm25 is negative and lower is better; rows found only by LIKE get 0, so text
       // matches rank above code/alias matches and everything else stays newest-first.
       rank = `COALESCE((SELECT bm25(messages_fts) FROM messages_fts WHERE message_id = m.id AND messages_fts MATCH ?${a}), 0)`;
-      terms.unshift(`EXISTS (SELECT 1 FROM messages_fts WHERE message_id = m.id AND messages_fts MATCH ?${b})`);
+      terms.unshift(
+        `EXISTS (SELECT 1 FROM messages_fts WHERE message_id = m.id AND messages_fts MATCH ?${b})`,
+      );
     }
     // Semantic hits arrive as ids from Vectorize. They join the same result set rather
     // than replacing it, so a keyword match is never lost because the model disagreed.
@@ -450,7 +435,7 @@ export async function listMessages(
                   -- exact and indexed, where a window over the filtered rows would drift with
                   -- every filter the owner applies.
                   (SELECT COUNT(*) FROM messages t
-                     WHERE COALESCE(t.thread_root_id, t.id) = COALESCE(g.thread_root_id, g.id)) AS thread_count
+                     WHERE COALESCE(t.thread_root_id, t.id) = COALESCE(g.thread_root_id, g.id) AND ${visibleMessageSql("t")}) AS thread_count
            FROM (${inner}) g
            WINDOW w AS (PARTITION BY COALESCE(g.thread_root_id, g.id) ORDER BY ${order})
          )
@@ -461,7 +446,10 @@ export async function listMessages(
       .bind(...params, query.limit, query.offset)
       .all<MessageRow & { thread_count?: number }>();
     return {
-      items: (results ?? []).map((r) => ({ ...toMessageSummary(r), threadCount: Number(r.thread_count ?? 1) })),
+      items: (results ?? []).map((r) => ({
+        ...toMessageSummary(r),
+        threadCount: Number(r.thread_count ?? 1),
+      })),
       total: Number(countRow?.c ?? 0),
     };
   }
@@ -486,8 +474,8 @@ export async function listMessages(
  * having received from them, which is what `outgoing` is for.
  *
  * The unfiltered call (composer opening) is cached briefly in the isolate: it unions two
- * whole-table scans, mail changes it only by adding a correspondent, and any write in this
- * file drops the cache anyway.
+ * whole-table scans, mail changes it only by adding a correspondent, and two minutes of
+ * staleness in an autocomplete beats a full scan on every open.
  */
 let correspondentsCache: { at: number; rows: Awaited<ReturnType<typeof queryCorrespondents>> } | null = null;
 const CORRESPONDENTS_TTL_MS = 120_000;
@@ -508,10 +496,10 @@ async function queryCorrespondents(
        FROM (
          SELECT lower(COALESCE(envelope_from, '')) AS addr, COALESCE(header_from, '') AS display_name,
                 received_at AS seen_at, direction
-           FROM messages WHERE direction = 'IN' AND envelope_from IS NOT NULL
+           FROM messages m WHERE ${visibleMessageSql()} AND direction = 'IN' AND envelope_from IS NOT NULL
          UNION ALL
          SELECT lower(header_to), COALESCE(header_to, ''), received_at, direction
-           FROM messages WHERE direction = 'OUT' AND header_to IS NOT NULL
+           FROM messages m WHERE ${visibleMessageSql()} AND direction = 'OUT' AND header_to IS NOT NULL
        )
        WHERE addr <> '' AND (addr LIKE ?1 OR display_name LIKE ?1)
        GROUP BY addr
@@ -520,16 +508,18 @@ async function queryCorrespondents(
     )
     .bind(like, Math.min(Math.max(limit, 1), 25))
     .all<{ address: string; name: string | null; last_seen: string; went_out: number }>();
-  return (results ?? [])
-    .map((r) => ({
-      address: r.address,
-      name: displayNameOf(r.name) ?? displayNameOf(r.address),
-      lastSeen: r.last_seen,
-      outgoing: r.went_out === 1,
-    }))
-    // A sent message records its recipients as one header, so a row naming several of them is
-    // not a single address and cannot be suggested as one.
-    .filter((r) => r.address.includes("@") && !r.address.includes(","));
+  return (
+    (results ?? [])
+      .map((r) => ({
+        address: r.address,
+        name: displayNameOf(r.name) ?? displayNameOf(r.address),
+        lastSeen: r.last_seen,
+        outgoing: r.went_out === 1,
+      }))
+      // A sent message records its recipients as one header, so a row naming several of them is
+      // not a single address and cannot be suggested as one.
+      .filter((r) => r.address.includes("@") && !r.address.includes(","))
+  );
 }
 
 export async function listCorrespondents(
@@ -537,19 +527,20 @@ export async function listCorrespondents(
   q: string | undefined,
   limit = 8,
 ): Promise<{ address: string; name: string | null; lastSeen: string; outgoing: boolean }[]> {
+  const clamp = Math.min(Math.max(limit, 1), 25);
   if (!q) {
-    const hit = correspondentsCache && Date.now() - correspondentsCache.at < CORRESPONDENTS_TTL_MS ? correspondentsCache : null;
-    if (hit) return hit.rows.slice(0, Math.min(Math.max(limit, 1), 25));
+    const hit =
+      correspondentsCache && Date.now() - correspondentsCache.at < CORRESPONDENTS_TTL_MS ? correspondentsCache : null;
+    if (hit) return hit.rows.slice(0, clamp);
     const rows = await queryCorrespondents(db, undefined, 25);
     correspondentsCache = { at: Date.now(), rows };
-    return rows.slice(0, Math.min(Math.max(limit, 1), 25));
+    return rows.slice(0, clamp);
   }
-  return queryCorrespondents(db, q, limit);
+  return queryCorrespondents(db, q, clamp);
 }
 
 /** `"Name <a@b>"` → `Name`; a bare address has no display name. */
-function displayNameOf(raw: string | null): string | null {
-  if (!raw) return null;
+function displayNameOf(raw: string | null): string | null {  if (!raw) return null;
   const bracketed = /^([^<]*)<[^>]+>$/.exec(raw.trim());
   if (bracketed) return (bracketed[1] ?? "").replace(/^"|"$/g, "").trim() || null;
   return raw.includes("@") ? null : raw.trim() || null;
@@ -562,15 +553,18 @@ export async function getMessageRow(db: D1Database, id: string): Promise<Message
        FROM messages m
        LEFT JOIN aliases a ON a.id = m.alias_id
        LEFT JOIN domains d ON d.id = m.domain_id
-       WHERE m.id = ?1`,
+       WHERE m.id = ?1 AND ${visibleMessageSql()}`,
     )
     .bind(id)
     .first<MessageRow>();
 }
 
-export async function getMessageAttachments(db: D1Database, messageId: string): Promise<Attachment[]> {
+export async function getMessageAttachments(
+  db: D1Database,
+  messageId: string,
+): Promise<Attachment[]> {
   const { results } = await db
-    .prepare(`SELECT * FROM attachments WHERE message_id = ?1 ORDER BY size DESC`)
+    .prepare(`SELECT att.* FROM attachments att JOIN messages m ON m.id=att.message_id WHERE att.message_id = ?1 AND ${visibleMessageSql()} ORDER BY att.size DESC`)
     .bind(messageId)
     .all<AttachmentRow>();
   return (results ?? []).map((r) => ({
@@ -590,8 +584,8 @@ export async function getMessageDetail(
   const row = await getMessageRow(db, id);
   if (!row) return null;
   const summary = toMessageSummary(row);
-  // Two independent reads of one message: asking for them together halves the latency
-  // between "opened" and "readable" without changing what either returns.
+  // Two independent reads of one message, asked for together: half the latency between
+  // "opened" and "readable", same answers.
   const [attachments, recipients] = await Promise.all([getMessageAttachments(db, id), listRecipients(db, id)]);
   return {
     ...summary,
@@ -610,11 +604,11 @@ export async function getMessageDetail(
     auth: toMessageAuth(row),
     inReplyTo: row.in_reply_to ?? null,
     references: parseJson<string[]>(row.references_json, []),
+    parsedR2Key: row.parsed_r2_key ?? null,
     replyTo: row.reply_to ?? null,
     sendError: row.send_error ?? null,
     listUnsubscribe: row.list_unsubscribe ?? null,
     oneClickUnsubscribe: row.list_unsubscribe_post != null,
-    parsedR2Key: row.parsed_r2_key ?? null,
   };
 }
 
@@ -641,23 +635,35 @@ export type FlagColumn = keyof typeof FLAG_COLUMNS;
  * so re-marking something already marked does not report work that did not happen, and no
  * row is rewritten for nothing.
  */
-export async function setFlag(db: D1Database, ids: string[], column: FlagColumn, value: 0 | 1): Promise<number> {
+export async function setFlag(
+  db: D1Database,
+  ids: string[],
+  column: FlagColumn,
+  value: 0 | 1,
+): Promise<number> {
   if (ids.length === 0) return 0;
   const col = FLAG_COLUMNS[column];
   const placeholders = ids.map((_, i) => `?${i + 1}`).join(", ");
   const res = await db
-    .prepare(`UPDATE messages SET ${col} = ?${ids.length + 1} WHERE id IN (${placeholders}) AND ${col} <> ?${ids.length + 1}`)
+    .prepare(
+      `UPDATE messages SET ${col} = ?${ids.length + 1} WHERE id IN (${placeholders}) AND ${visibleMessageSql("messages")} AND ${col} <> ?${ids.length + 1}`,
+    )
     .bind(...ids, value)
     .run();
   return changes(res);
 }
 
 /** Flags for several messages at once, returning the keys of everything removed. */
-export async function deleteMessages(db: D1Database, ids: string[]): Promise<{ removed: number; keys: string[] }> {
+export async function deleteMessages(
+  db: D1Database,
+  ids: string[],
+): Promise<{ removed: number; keys: string[] }> {
   if (ids.length === 0) return { removed: 0, keys: [] };
   const placeholders = ids.map((_, i) => `?${i + 1}`).join(", ");
   const [stored, attached] = await db.batch([
-    db.prepare(`SELECT raw_r2_key, parsed_r2_key FROM messages WHERE id IN (${placeholders})`).bind(...ids),
+    db
+      .prepare(`SELECT raw_r2_key, parsed_r2_key FROM messages WHERE id IN (${placeholders})`)
+      .bind(...ids),
     db.prepare(`SELECT r2_key FROM attachments WHERE message_id IN (${placeholders})`).bind(...ids),
   ]);
   const rows = (stored?.results ?? []) as { raw_r2_key: string; parsed_r2_key: string | null }[];
@@ -673,7 +679,6 @@ export async function deleteMessages(db: D1Database, ids: string[]): Promise<{ r
     db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).bind(...ids),
     db.prepare(`DELETE FROM messages_fts WHERE message_id IN (${placeholders})`).bind(...ids),
   ]);
-  correspondentsCache = null;
   return { removed: rows.length, keys: [...keys] };
 }
 
@@ -686,26 +691,27 @@ export async function deleteMessages(db: D1Database, ids: string[]): Promise<{ r
  */
 export async function messageCounters(db: D1Database, domainId?: string): Promise<MessageCounters> {
   // Eight small counts in one batch, each an index seek on its tab's filter, instead of
-  // one aggregate that reads every row of the mailbox: a badge should not have to walk
-  // the whole table to know its number, and COUNT with a WHERE is a shape SQLite
-  // reliably serves from an index.
-  const scope = domainId ? " AND domain_id = ?1" : "";
+  // one aggregate that reads every row: a badge should not have to walk the whole table
+  // to know its number. The visibility fence main added stays in every branch — deleted-
+  // pending mail is not unread mail.
+  const scope = domainId ? " AND m.domain_id = ?1" : "";
   const bind = domainId ? [domainId] : [];
-  const count = (where: string) => db.prepare(`SELECT COUNT(*) AS c FROM messages WHERE ${where}${scope}`).bind(...bind);
+  const count = (where: string) =>
+    db.prepare(`SELECT COUNT(*) AS c FROM messages m WHERE ${visibleMessageSql()} AND (${where})${scope}`).bind(...bind);
   const [inboxTotal, inboxUnread, sentTotal, sentUnread, starredTotal, starredUnread, filedTotal, filedUnread, perMailbox] =
     await db.batch([
-      count(`direction = 'IN' AND archived = 0`),
-      count(`direction = 'IN' AND archived = 0 AND is_read = 0`),
-      count(`direction = 'OUT'`),
-      count(`direction = 'OUT' AND is_read = 0`),
-      count(`starred = 1`),
-      count(`starred = 1 AND is_read = 0`),
-      count(`archived = 1`),
-      count(`archived = 1 AND is_read = 0`),
+      count(`m.direction = 'IN' AND m.archived = 0`),
+      count(`m.direction = 'IN' AND m.archived = 0 AND m.is_read = 0`),
+      count(`m.direction = 'OUT'`),
+      count(`m.direction = 'OUT' AND m.is_read = 0`),
+      count(`m.starred = 1`),
+      count(`m.starred = 1 AND m.is_read = 0`),
+      count(`m.archived = 1`),
+      count(`m.archived = 1 AND m.is_read = 0`),
       db
         .prepare(
-          `SELECT domain_id, COUNT(*) AS unread FROM messages
-           WHERE direction = 'IN' AND archived = 0 AND is_read = 0${scope}
+          `SELECT domain_id, COUNT(*) AS unread FROM messages m
+           WHERE ${visibleMessageSql()} AND m.direction = 'IN' AND m.archived = 0 AND m.is_read = 0${scope}
            GROUP BY domain_id`,
         )
         .bind(...bind),
@@ -749,7 +755,6 @@ export async function deleteMessage(db: D1Database, id: string): Promise<string[
     db.prepare(`DELETE FROM messages WHERE id = ?1`).bind(id),
     db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(id),
   ]);
-  correspondentsCache = null;
   return changes(res as { meta?: unknown }) === 0 ? [] : keys;
 }
 
@@ -759,7 +764,7 @@ export async function findAttachment(
   attachmentId: string,
 ): Promise<AttachmentRow | null> {
   return db
-    .prepare(`SELECT * FROM attachments WHERE id = ?1 AND message_id = ?2`)
+    .prepare(`SELECT att.* FROM attachments att JOIN messages m ON m.id=att.message_id WHERE att.id = ?1 AND att.message_id = ?2 AND ${visibleMessageSql()}`)
     .bind(attachmentId, messageId)
     .first<AttachmentRow>();
 }

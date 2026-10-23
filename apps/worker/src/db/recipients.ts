@@ -18,6 +18,8 @@ import type { MessageRecipientRow } from "./rows";
  * retry report landing after the eventual `delivered` must not rewrite history.
  */
 export const STATUS_RANK: Record<SendStatus, number> = {
+  [SendStatus.Preparing]: -2,
+  [SendStatus.Unknown]: -1,
   [SendStatus.Queued]: 0,
   [SendStatus.Deferred]: 1,
   [SendStatus.Delivered]: 2,
@@ -170,7 +172,10 @@ export function aggregateStatus(statuses: SendStatus[]): SendStatus {
 }
 
 /** Recompute `messages.send_status` from the destination rows. */
-export async function refreshSendStatus(db: D1Database, messageId: string): Promise<SendStatus | null> {
+export async function refreshSendStatus(
+  db: D1Database,
+  messageId: string,
+): Promise<SendStatus | null> {
   const { results } = await db
     .prepare(`SELECT status FROM message_recipients WHERE message_id = ?1`)
     .bind(messageId)
@@ -178,7 +183,10 @@ export async function refreshSendStatus(db: D1Database, messageId: string): Prom
   const rows = results ?? [];
   if (rows.length === 0) return null;
   const status = aggregateStatus(rows.map((r) => r.status as SendStatus));
-  await db.prepare(`UPDATE messages SET send_status = ?2 WHERE id = ?1`).bind(messageId, status).run();
+  await db
+    .prepare(`UPDATE messages SET send_status = ?2 WHERE id = ?1`)
+    .bind(messageId, status)
+    .run();
   return status;
 }
 

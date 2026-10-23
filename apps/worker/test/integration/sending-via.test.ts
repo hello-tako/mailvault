@@ -5,6 +5,7 @@ import type { Env } from "../../src/env";
 import worker from "../../src/index";
 import { newId, nowIso } from "../../src/lib/util";
 import { getTestBindings, type TestBindings } from "./_mf";
+import { verifiedDkimPassFixture } from "./_auth-fixtures";
 
 /**
  * Sending through a subdomain of the same zone.
@@ -20,7 +21,10 @@ let TEST_ENV: Env;
 let DB: D1Database;
 let BUCKET: R2Bucket;
 
-const CTX = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+const CTX = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 const j = async (r: Response): Promise<any> => r.json();
 const H = { "x-mailvault": "1", "content-type": "application/json" };
 
@@ -37,7 +41,14 @@ function acceptingStub(): SendEmail {
 }
 
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://localhost${path}`, { ...init, headers: { origin: "http://localhost", ...(init.headers ?? {}) } });
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers: {
+      origin: "http://localhost",
+      "Idempotency-Key": crypto.randomUUID(),
+      ...(init.headers ?? {}),
+    },
+  });
 }
 
 let domainId = "";
@@ -57,7 +68,9 @@ async function seed(overrides: { sending?: string; via?: string | null } = {}) {
   )
     .bind(domainId, zoneId, overrides.sending ?? SendingStatus.Enabled, overrides.via ?? null)
     .run();
-  await DB.prepare(`INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, 'ACTIVE')`)
+  await DB.prepare(
+    `INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, 'ACTIVE')`,
+  )
     .bind(newId(), domainId, local, aliasAddress)
     .run();
 }
@@ -75,7 +88,13 @@ async function compose(payload: Record<string, unknown> = {}) {
     req("/api/outbox", {
       method: "POST",
       headers: H,
-      body: JSON.stringify({ fromAddress: aliasAddress, to: ["buyer@customer.example"], subject: "Chốt đơn", text: "Cảm ơn bạn!", ...payload }),
+      body: JSON.stringify({
+        fromAddress: aliasAddress,
+        to: ["buyer@customer.example"],
+        subject: "Chốt đơn",
+        text: "Cảm ơn bạn!",
+        ...payload,
+      }),
     }),
     TEST_ENV,
     CTX,
@@ -98,6 +117,7 @@ afterAll(async () => {
 beforeEach(async () => {
   sent = [];
   TEST_ENV.EMAIL = acceptingStub();
+  await DB.prepare(`DELETE FROM outbound_jobs`).run();
   await DB.prepare(`DELETE FROM messages`).run();
   await DB.prepare(`DELETE FROM messages_fts`).run();
   await DB.prepare(`DELETE FROM aliases`).run();
@@ -108,13 +128,21 @@ describe("choosing the name a domain sends under", () => {
   it("records the choice and forgets what was believed about the old name", async () => {
     await seed({ sending: SendingStatus.Enabled });
     const res = await worker.fetch(
-      req(`/api/domains/${zoneId}/sending-via`, { method: "PUT", headers: H, body: JSON.stringify({ name: "send.omnipos.tech" }) }),
+      req(`/api/domains/${zoneId}/sending-via`, {
+        method: "PUT",
+        headers: H,
+        body: JSON.stringify({ name: "send.omnipos.tech" }),
+      }),
       TEST_ENV,
       CTX,
     );
     // No Cloudflare token here, so the state cannot be read — and the choice still stands.
     expect(res.status).toBe(200);
-    expect(await j(res)).toMatchObject({ domainId, sendingVia: "send.omnipos.tech", sendingStatus: "UNKNOWN" });
+    expect(await j(res)).toMatchObject({
+      domainId,
+      sendingVia: "send.omnipos.tech",
+      sendingStatus: "UNKNOWN",
+    });
     const stored = await domainRow();
     expect(stored.sending_via).toBe("send.omnipos.tech");
     // The ENABLED verdict belonged to `omnipos.tech`. Carrying it over would promise a send
@@ -126,7 +154,11 @@ describe("choosing the name a domain sends under", () => {
   it("refuses a name that is not inside the domain's own zone", async () => {
     await seed();
     const res = await worker.fetch(
-      req(`/api/domains/${zoneId}/sending-via`, { method: "PUT", headers: H, body: JSON.stringify({ name: "send.otherzone.test" }) }),
+      req(`/api/domains/${zoneId}/sending-via`, {
+        method: "PUT",
+        headers: H,
+        body: JSON.stringify({ name: "send.otherzone.test" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -137,7 +169,11 @@ describe("choosing the name a domain sends under", () => {
   it("treats the domain's own name as no choice at all", async () => {
     await seed({ via: "send.omnipos.tech" });
     const res = await worker.fetch(
-      req(`/api/domains/${zoneId}/sending-via`, { method: "PUT", headers: H, body: JSON.stringify({ name: "OMNIPOS.TECH" }) }),
+      req(`/api/domains/${zoneId}/sending-via`, {
+        method: "PUT",
+        headers: H,
+        body: JSON.stringify({ name: "OMNIPOS.TECH" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -149,7 +185,11 @@ describe("choosing the name a domain sends under", () => {
   it("clears the choice again", async () => {
     await seed({ via: "send.omnipos.tech" });
     const res = await worker.fetch(
-      req(`/api/domains/${zoneId}/sending-via`, { method: "PUT", headers: H, body: JSON.stringify({ name: null }) }),
+      req(`/api/domains/${zoneId}/sending-via`, {
+        method: "PUT",
+        headers: H,
+        body: JSON.stringify({ name: null }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -173,7 +213,13 @@ describe("sending as the chosen name", () => {
     expect(stored.envelope_from).toBe(sent[0].from);
     expect(stored.reply_to).toBe(aliasAddress);
     // Still the same mailbox: the row belongs to the alias it was written from.
-    expect(stored.alias_id).toBe((await DB.prepare(`SELECT id FROM aliases WHERE address = ?1`).bind(aliasAddress).first<any>()).id);
+    expect(stored.alias_id).toBe(
+      (
+        await DB.prepare(`SELECT id FROM aliases WHERE address = ?1`)
+          .bind(aliasAddress)
+          .first<any>()
+      ).id,
+    );
     expect(stored.direction).toBe("OUT");
 
     const raw = await (await BUCKET.get(stored.raw_r2_key))!.text();
@@ -218,15 +264,28 @@ describe("sending as the chosen name", () => {
     const parentId = newId();
     await DB.prepare(
       `INSERT INTO messages (id, domain_id, alias_id, provider_message_id, dedupe_key, envelope_from, envelope_to,
-         header_from, header_to, subject, received_at, raw_r2_key, auth_verdict, direction, thread_root_id, is_read)
+         header_from, header_to, subject, received_at, raw_r2_key, auth_verdict, auth_json, direction, thread_root_id, is_read)
        VALUES (?1, ?2, (SELECT id FROM aliases WHERE address = ?3), ?4, ?5, 'billing@customer.example', ?3,
-         'Billing <billing@customer.example>', ?3, 'Your invoice', ?6, ?7, 'TRUSTED', 'IN', ?1, 1)`,
+         'Billing <billing@customer.example>', ?3, 'Your invoice', ?6, ?7, 'TRUSTED', ?8, 'IN', ?1, 1)`,
     )
-      .bind(parentId, domainId, aliasAddress, `${parentId}@customer.example`, `in-${parentId}`, nowIso(), `seed/${parentId}.eml`)
+      .bind(
+        parentId,
+        domainId,
+        aliasAddress,
+        `${parentId}@customer.example`,
+        `in-${parentId}`,
+        nowIso(),
+        `seed/${parentId}.eml`,
+        verifiedDkimPassFixture("customer.example"),
+      )
       .run();
 
     const res = await worker.fetch(
-      req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "Đã nhận được." }) }),
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "Đã nhận được." }),
+      }),
       TEST_ENV,
       CTX,
     );

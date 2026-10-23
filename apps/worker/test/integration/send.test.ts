@@ -4,14 +4,20 @@ import { SEND_LIMITS } from "@mailvault/shared";
 import type { Env } from "../../src/env";
 import worker from "../../src/index";
 import { newId, nowIso } from "../../src/lib/util";
+import { newGrant } from "../../src/db/security";
+import { drainDeletionJobs } from "../../src/db/deletions";
 import { getTestBindings, type TestBindings } from "./_mf";
+import { verifiedDkimPassFixture } from "./_auth-fixtures";
 
 let bindings: TestBindings;
 let TEST_ENV: Env;
 let DB: D1Database;
 let BUCKET: R2Bucket;
 
-const CTX = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+const CTX = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 const j = async (r: Response): Promise<any> => r.json();
 
 /** Everything the binding was asked to send, so a test can assert on the wire request. */
@@ -40,7 +46,14 @@ afterAll(async () => {
 });
 
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://localhost${path}`, { ...init, headers: { origin: "http://localhost", ...(init.headers ?? {}) } });
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers: {
+      origin: "http://localhost",
+      "Idempotency-Key": crypto.randomUUID(),
+      ...(init.headers ?? {}),
+    },
+  });
 }
 const H = { "x-mailvault": "1", "content-type": "application/json" };
 
@@ -61,18 +74,29 @@ async function seed(overrides: { sending?: string; aliasStatus?: string } = {}) 
   )
     .bind(domainId, `zone-${domainId.slice(0, 8)}`, overrides.sending ?? "ENABLED")
     .run();
-  await DB.prepare(`INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, ?5)`)
+  await DB.prepare(
+    `INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, ?5)`,
+  )
     .bind(newId(), domainId, local, aliasAddress, overrides.aliasStatus ?? "ACTIVE")
     .run();
 }
 
-async function seedIncoming(over: Partial<{ id: string; provider: string; from: string; subject: string; verdict: string; thread: string }> = {}) {
+async function seedIncoming(
+  over: Partial<{
+    id: string;
+    provider: string;
+    from: string;
+    subject: string;
+    verdict: string;
+    thread: string;
+  }> = {},
+) {
   const id = over.id ?? newId();
   await DB.prepare(
     `INSERT INTO messages (id, domain_id, alias_id, provider_message_id, dedupe_key, envelope_from, envelope_to,
-       header_from, header_to, subject, received_at, raw_r2_key, auth_verdict, direction, thread_root_id, is_read)
+       header_from, header_to, subject, received_at, raw_r2_key, auth_verdict, auth_json, direction, thread_root_id, is_read)
      VALUES (?1, ?2, (SELECT id FROM aliases WHERE address = ?3), ?4, ?5, 'billing@shop.example', ?3,
-       ?6, ?3, ?7, ?8, ?9, ?10, 'IN', ?11, 1)`,
+       ?6, ?3, ?7, ?8, ?9, ?10, ?11, 'IN', ?12, 1)`,
   )
     .bind(
       id,
@@ -85,6 +109,7 @@ async function seedIncoming(over: Partial<{ id: string; provider: string; from: 
       nowIso(),
       `seed/${id}.eml`,
       over.verdict ?? "TRUSTED",
+      (over.verdict ?? "TRUSTED") === "TRUSTED" ? verifiedDkimPassFixture("shop.example") : null,
       over.thread ?? id,
     )
     .run();
@@ -115,6 +140,8 @@ async function row(id: string) {
 beforeEach(async () => {
   sent = [];
   TEST_ENV.EMAIL = acceptingStub();
+  await DB.prepare(`DELETE FROM deletion_jobs`).run();
+  await DB.prepare(`DELETE FROM outbound_jobs`).run();
   await DB.prepare(`DELETE FROM messages`).run();
   await DB.prepare(`DELETE FROM aliases`).run();
   await DB.prepare(`DELETE FROM domains`).run();
@@ -125,7 +152,15 @@ beforeEach(async () => {
 describe("sending from an alias", () => {
   it("refuses an address that is not one of the owner's aliases", async () => {
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: "someone@example.com", to: ["a@b.example"], text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          fromAddress: "someone@example.com",
+          to: ["a@b.example"],
+          text: "hi",
+        }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -137,7 +172,11 @@ describe("sending from an alias", () => {
   it("refuses a disabled alias, the same gate that refuses to receive for it", async () => {
     await seed({ aliasStatus: "DISABLED" });
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -147,7 +186,11 @@ describe("sending from an alias", () => {
   it("refuses a domain that receives but has not been enabled for sending", async () => {
     await seed({ sending: "DISABLED" });
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -158,14 +201,20 @@ describe("sending from an alias", () => {
   it("says so when the deployment cannot send at all, rather than failing obscurely", async () => {
     delete TEST_ENV.EMAIL;
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" }),
+      }),
       TEST_ENV,
       CTX,
     );
     expect((await j(res)).error.code).toBe("BINDING_MISSING");
     // The attempt is still recorded: a message that did not go should be visible as one that
     // did not go, not vanish because the transport was missing.
-    const rows = await DB.prepare(`SELECT send_status, send_error FROM messages WHERE direction = 'OUT'`).all<any>();
+    const rows = await DB.prepare(
+      `SELECT send_status, send_error FROM messages WHERE direction = 'OUT'`,
+    ).all<any>();
     expect(rows.results).toHaveLength(1);
     expect(rows.results[0].send_status).toBe("FAILED");
     expect(rows.results[0].send_error).toContain("BINDING_MISSING");
@@ -175,7 +224,11 @@ describe("sending from an alias", () => {
     const parentId = await seedIncoming({ verdict: "SPOOFED" });
     delete TEST_ENV.EMAIL;
     const res = await worker.fetch(
-      req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "ok" }) }),
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "ok" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -189,7 +242,12 @@ describe("sending from an alias", () => {
       req("/api/outbox", {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ fromAddress: aliasAddress, to: ["customer@example.com"], subject: "Chốt đơn", text: "Cảm ơn bạn!" }),
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["customer@example.com"],
+          subject: "Chốt đơn",
+          text: "Cảm ơn bạn!",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -230,7 +288,14 @@ describe("sending from an alias", () => {
       req("/api/outbox", {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], cc: ["c@d.example"], bcc: ["secret@e.example"], text: "hi", subject: "s" }),
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["a@b.example"],
+          cc: ["c@d.example"],
+          bcc: ["secret@e.example"],
+          text: "hi",
+          subject: "s",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -241,7 +306,7 @@ describe("sending from an alias", () => {
     // The envelope carries the hidden recipient; the message that is stored and downloaded
     // must not name them.
     expect(stored.envelope_to).toContain("secret@e.example");
-    expect((await (await BUCKET.get(stored.raw_r2_key))!.text())).not.toContain("secret@e.example");
+    expect(await (await BUCKET.get(stored.raw_r2_key))!.text()).not.toContain("secret@e.example");
     expect(sent[0].bcc).toEqual(["secret@e.example"]);
   });
 
@@ -250,7 +315,11 @@ describe("sending from an alias", () => {
       req("/api/outbox", {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example", "A@b.example ", aliasAddress], text: "hi" }),
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["a@b.example", "A@b.example ", aliasAddress],
+          text: "hi",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -264,7 +333,12 @@ describe("sending from an alias", () => {
       req("/api/outbox", {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ fromAddress: aliasAddress, to: ["x@y.example"], cc: ["X@y.example", "z@w.example"], text: "hi" }),
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["x@y.example"],
+          cc: ["X@y.example", "z@w.example"],
+          text: "hi",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -275,7 +349,11 @@ describe("sending from an alias", () => {
 
   it("still delivers a note the owner writes to their own alias", async () => {
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: [aliasAddress], text: "self note" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: [aliasAddress], text: "self note" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -285,9 +363,17 @@ describe("sending from an alias", () => {
   it("stops at its own daily budget, because Cloudflare's counter is not realtime", async () => {
     TEST_ENV.MAX_SENDS_PER_DAY = "1";
     const body = JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "hi" });
-    const first = await worker.fetch(req("/api/outbox", { method: "POST", headers: H, body }), TEST_ENV, CTX);
+    const first = await worker.fetch(
+      req("/api/outbox", { method: "POST", headers: H, body }),
+      TEST_ENV,
+      CTX,
+    );
     expect(first.status).toBe(201);
-    const second = await worker.fetch(req("/api/outbox", { method: "POST", headers: H, body }), TEST_ENV, CTX);
+    const second = await worker.fetch(
+      req("/api/outbox", { method: "POST", headers: H, body }),
+      TEST_ENV,
+      CTX,
+    );
     expect((await j(second)).error.code).toBe("DAILY_LIMIT");
     expect(sent).toHaveLength(1);
     delete TEST_ENV.MAX_SENDS_PER_DAY;
@@ -296,18 +382,26 @@ describe("sending from an alias", () => {
   it("reports the transport's refusal as the message's state, not as a lost send", async () => {
     TEST_ENV.EMAIL = {
       send: async () => {
-        throw Object.assign(new Error("recipient is suppressed"), { code: "E_RECIPIENT_SUPPRESSED" });
+        throw Object.assign(new Error("recipient is suppressed"), {
+          code: "E_RECIPIENT_SUPPRESSED",
+        });
       },
     } as unknown as SendEmail;
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["gone@b.example"], text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["gone@b.example"], text: "hi" }),
+      }),
       TEST_ENV,
       CTX,
     );
     expect(res.status).toBe(400);
     expect((await j(res)).error.code).toBe("E_RECIPIENT_SUPPRESSED");
     // The record stays, marked with what happened, so the owner can see it never went.
-    const rows = await DB.prepare(`SELECT send_status, send_error FROM messages WHERE direction = 'OUT'`).all<any>();
+    const rows = await DB.prepare(
+      `SELECT send_status, send_error FROM messages WHERE direction = 'OUT'`,
+    ).all<any>();
     expect(rows.results[0].send_status).toBe("SUPPRESSED");
     expect(rows.results[0].send_error).toContain("E_RECIPIENT_SUPPRESSED");
   });
@@ -317,7 +411,11 @@ describe("replying inside a conversation", () => {
   it("answers the sender of the message, from the alias it arrived on, in the same thread", async () => {
     const parentId = await seedIncoming({ from: "Billing <billing@shop.example>" });
     const res = await worker.fetch(
-      req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "Where is my invoice?" }) }),
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "Where is my invoice?" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -335,15 +433,33 @@ describe("replying inside a conversation", () => {
 
   it("prefers Reply-To over From, because that is the address the author asked for answers", async () => {
     const parentId = await seedIncoming({ from: "Newsletter <no-answer@shop.example>" });
-    await DB.prepare(`UPDATE messages SET reply_to = 'help@shop.example' WHERE id = ?1`).bind(parentId).run();
-    await worker.fetch(req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "hello" }) }), TEST_ENV, CTX);
+    await DB.prepare(`UPDATE messages SET reply_to = 'help@shop.example' WHERE id = ?1`)
+      .bind(parentId)
+      .run();
+    await worker.fetch(
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "hello" }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect(sent[0].to).toEqual(["help@shop.example"]);
   });
 
   it("continues a thread when the arriving message quotes the reply rather than the original", async () => {
     const root = await seedIncoming();
     const replyId = await (async () => {
-      const res = await worker.fetch(req(`/api/messages/${root}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "hi" }) }), TEST_ENV, CTX);
+      const res = await worker.fetch(
+        req(`/api/messages/${root}/reply`, {
+          method: "POST",
+          headers: H,
+          body: JSON.stringify({ text: "hi" }),
+        }),
+        TEST_ENV,
+        CTX,
+      );
       return (await j(res)).id;
     })();
     const quoted = (await row(replyId)).provider_message_id;
@@ -374,7 +490,9 @@ describe("replying inside a conversation", () => {
     const result = await ingestEmail(message, TEST_ENV, DB, BUCKET);
     expect(result.status).toBe("stored");
 
-    const answered = await DB.prepare(`SELECT id, thread_root_id FROM messages WHERE provider_message_id = 'answer-2@shop.example'`).first<any>();
+    const answered = await DB.prepare(
+      `SELECT id, thread_root_id FROM messages WHERE provider_message_id = 'answer-2@shop.example'`,
+    ).first<any>();
     expect(answered.thread_root_id).toBe(root);
 
     const thread = await j(await worker.fetch(req(`/api/threads/${root}`), TEST_ENV, CTX));
@@ -384,11 +502,30 @@ describe("replying inside a conversation", () => {
   it("will not answer a message whose sender failed authentication", async () => {
     const parentId = await seedIncoming({ verdict: "SPOOFED" });
     const res = await worker.fetch(
-      req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "ok" }) }),
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "ok" }),
+      }),
       TEST_ENV,
       CTX,
     );
     expect((await j(res)).error.code).toBe("SPOOFED_PARENT");
+    expect(sent).toHaveLength(0);
+  });
+
+  it("will not answer an inbound message whose sender is unverified", async () => {
+    const parentId = await seedIncoming({ verdict: "UNVERIFIED" });
+    const res = await worker.fetch(
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ text: "ok" }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect((await j(res)).error.code).toBe("UNVERIFIED_PARENT");
     expect(sent).toHaveLength(0);
   });
 
@@ -398,7 +535,11 @@ describe("replying inside a conversation", () => {
       req(`/api/messages/${parentId}/reply`, {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ text: "hi", to: ["victim@other.example"], fromAddress: "victim@other.example" }),
+        body: JSON.stringify({
+          text: "hi",
+          to: ["victim@other.example"],
+          fromAddress: "victim@other.example",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -418,7 +559,16 @@ describe("sending files along with a message", () => {
 
   async function composeWith(payload: Record<string, unknown>) {
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], text: "see attached", ...payload }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["a@b.example"],
+          text: "see attached",
+          ...payload,
+        }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -433,7 +583,10 @@ describe("sending files along with a message", () => {
 
   it("keeps its own copy of the file, and serves it back through the authenticated route", async () => {
     const body = asBytes("Tổng: 1.500.000đ");
-    const { res, body: outcome } = await composeWith({ subject: "Invoice", attachments: [file("invoice.txt", body)] });
+    const { res, body: outcome } = await composeWith({
+      subject: "Invoice",
+      attachments: [file("invoice.txt", body)],
+    });
     expect(res.status).toBe(201);
 
     const stored = await row(outcome.id);
@@ -442,11 +595,21 @@ describe("sending files along with a message", () => {
 
     // The binding is handed the file in the shape the runtime documents, base64 and all.
     expect(sent[0].attachments).toHaveLength(1);
-    expect(sent[0].attachments[0]).toMatchObject({ disposition: "attachment", filename: "invoice.txt", type: "text/plain" });
-    expect(Buffer.from(sent[0].attachments[0].content, "base64").toString("utf8")).toBe("Tổng: 1.500.000đ");
+    expect(sent[0].attachments[0]).toMatchObject({
+      disposition: "attachment",
+      filename: "invoice.txt",
+      type: "text/plain",
+    });
+    expect(Buffer.from(sent[0].attachments[0].content, "base64").toString("utf8")).toBe(
+      "Tổng: 1.500.000đ",
+    );
 
     const detail = await j(await worker.fetch(req(`/api/messages/${outcome.id}`), TEST_ENV, CTX));
-    expect(detail.attachments[0]).toMatchObject({ filename: "invoice.txt", contentType: "text/plain", size: body.byteLength });
+    expect(detail.attachments[0]).toMatchObject({
+      filename: "invoice.txt",
+      contentType: "text/plain",
+      size: body.byteLength,
+    });
 
     const dl = await worker.fetch(req(detail.attachments[0].downloadPath), TEST_ENV, CTX);
     expect(dl.status).toBe(200);
@@ -456,7 +619,9 @@ describe("sending files along with a message", () => {
   });
 
   it("stores the record of a file message as multipart, so the download is the whole mail", async () => {
-    const { res, body: outcome } = await composeWith({ attachments: [file("notes.txt", asBytes("one\nthree"))] });
+    const { res, body: outcome } = await composeWith({
+      attachments: [file("notes.txt", asBytes("one\nthree"))],
+    });
     const raw = await (await BUCKET.get((await row(outcome.id)).raw_r2_key))!.text();
     expect(res.status).toBe(201);
     expect(raw).toContain("Content-Type: multipart/mixed;");
@@ -470,7 +635,11 @@ describe("sending files along with a message", () => {
   it("keeps the owner's file name in the record and a safe one on the wire", async () => {
     const original = "Hoá đơn tháng 9.pdf.txt";
     const { body: outcome } = await composeWith({ attachments: [file(original, asBytes("x"))] });
-    const [att] = (await DB.prepare(`SELECT * FROM attachments WHERE message_id = ?1`).bind(outcome.id).all<any>()).results;
+    const [att] = (
+      await DB.prepare(`SELECT * FROM attachments WHERE message_id = ?1`)
+        .bind(outcome.id)
+        .all<any>()
+    ).results;
     expect(att.filename).toBe(original);
     expect(att.safe_filename).toMatch(/^[A-Za-z0-9._-]+$/);
     expect(att.safe_filename.endsWith(".txt")).toBe(true);
@@ -480,7 +649,10 @@ describe("sending files along with a message", () => {
   });
 
   it("will not let a file name write a header of its own", async () => {
-    const { body: outcome } = await composeWith({ subject: "Real subject", attachments: [file("x\r\nX-Injected: yes.txt", asBytes("y"))] });
+    const { body: outcome } = await composeWith({
+      subject: "Real subject",
+      attachments: [file("x\r\nX-Injected: yes.txt", asBytes("y"))],
+    });
     const raw = await (await BUCKET.get((await row(outcome.id)).raw_r2_key))!.text();
     expect(raw).not.toMatch(/^X-Injected:/m);
     expect(raw.match(/^Subject:/gm)).toHaveLength(1);
@@ -488,17 +660,24 @@ describe("sending files along with a message", () => {
   });
 
   it("says so when a file did not arrive as readable bytes", async () => {
-    const { res, body } = await composeWith({ attachments: [{ filename: "half.txt", type: "text/plain", content: "A" }] });
+    const { res, body } = await composeWith({
+      attachments: [{ filename: "half.txt", type: "text/plain", content: "A" }],
+    });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("BAD_ATTACHMENT");
     expect(sent).toHaveLength(0);
-    expect((await DB.prepare(`SELECT count(*) AS n FROM messages WHERE direction = 'OUT'`).first<any>()).n).toBe(0);
+    expect(
+      (await DB.prepare(`SELECT count(*) AS n FROM messages WHERE direction = 'OUT'`).first<any>())
+        .n,
+    ).toBe(0);
   });
 
   it("refuses a file that alone cannot fit inside one message", async () => {
     // The request may carry a file of up to a whole message's size — the shape cannot tell that
     // one file and three small ones apart — so this is the assembled message saying no.
-    const { res, body } = await composeWith({ attachments: [file("big.bin", new Uint8Array(SEND_LIMITS.maxTotalBytes + 1))] });
+    const { res, body } = await composeWith({
+      attachments: [file("big.bin", new Uint8Array(SEND_LIMITS.maxTotalBytes + 1))],
+    });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("TOO_LARGE");
     expect(sent).toHaveLength(0);
@@ -527,19 +706,30 @@ describe("sending files along with a message", () => {
     // come before anything is written down.
     const big = new Uint8Array(1_500_000).fill(7);
     const { res, body } = await composeWith({
-      attachments: [file("a.bin", big, "application/octet-stream"), file("b.bin", big, "application/octet-stream"), file("c.bin", big, "application/octet-stream")],
+      attachments: [
+        file("a.bin", big, "application/octet-stream"),
+        file("b.bin", big, "application/octet-stream"),
+        file("c.bin", big, "application/octet-stream"),
+      ],
     });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("TOO_LARGE");
     expect(body.error.message).toMatch(/5\.0 MB/);
     expect(sent).toHaveLength(0);
-    expect((await DB.prepare(`SELECT count(*) AS n FROM messages WHERE direction = 'OUT'`).first<any>()).n).toBe(0);
+    expect(
+      (await DB.prepare(`SELECT count(*) AS n FROM messages WHERE direction = 'OUT'`).first<any>())
+        .n,
+    ).toBe(0);
     expect((await DB.prepare(`SELECT count(*) AS n FROM attachments`).first<any>()).n).toBe(0);
   });
 
   it("refuses more files than one message may carry", async () => {
     const tiny = new Uint8Array([1, 2, 3]);
-    const { res, body } = await composeWith({ attachments: Array.from({ length: SEND_LIMITS.maxAttachments + 1 }, (_, i) => file(`f${i}.bin`, tiny, "application/octet-stream")) });
+    const { res, body } = await composeWith({
+      attachments: Array.from({ length: SEND_LIMITS.maxAttachments + 1 }, (_, i) =>
+        file(`f${i}.bin`, tiny, "application/octet-stream"),
+      ),
+    });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("VALIDATION_ERROR");
     expect(sent).toHaveLength(0);
@@ -548,7 +738,14 @@ describe("sending files along with a message", () => {
   it("takes files on a reply too, through the same rules", async () => {
     const parentId = await seedIncoming();
     const res = await worker.fetch(
-      req(`/api/messages/${parentId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "here you go", attachments: [file("proof.txt", asBytes("done"))] }) }),
+      req(`/api/messages/${parentId}/reply`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          text: "here you go",
+          attachments: [file("proof.txt", asBytes("done"))],
+        }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -562,17 +759,34 @@ describe("sending files along with a message", () => {
   it("finds sent mail by the fact that it carries a file", async () => {
     await composeWith({ attachments: [file("one.txt", asBytes("1"))] });
     await composeWith({ subject: "no files" });
-    const found = await j(await worker.fetch(req("/api/messages?direction=out&q=has:attachment"), TEST_ENV, CTX));
+    const found = await j(
+      await worker.fetch(req("/api/messages?direction=out&q=has:attachment"), TEST_ENV, CTX),
+    );
     expect(found.items).toHaveLength(1);
     expect(found.items[0].attachmentCount).toBe(1);
   });
 
   it("deletes the stored file with the message", async () => {
-    const { body: outcome } = await composeWith({ attachments: [file("gone.txt", asBytes("bye"))] });
-    const key = (await DB.prepare(`SELECT r2_key FROM attachments WHERE message_id = ?1`).bind(outcome.id).first<any>()).r2_key;
+    const { body: outcome } = await composeWith({
+      attachments: [file("gone.txt", asBytes("bye"))],
+    });
+    const key = (
+      await DB.prepare(`SELECT r2_key FROM attachments WHERE message_id = ?1`)
+        .bind(outcome.id)
+        .first<any>()
+    ).r2_key;
     expect(await BUCKET.get(key)).toBeTruthy();
-    const res = await worker.fetch(req(`/api/messages/${outcome.id}`, { method: "DELETE", headers: { "x-mailvault": "1" } }), TEST_ENV, CTX);
-    expect(res.status).toBe(200);
+    const grant = await newGrant(DB, 60_000);
+    const res = await worker.fetch(
+      req(`/api/messages/${outcome.id}`, {
+        method: "DELETE",
+        headers: { "x-mailvault": "1", "x-mailvault-stepup": grant.token },
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(202);
+    await drainDeletionJobs(TEST_ENV);
     expect(await BUCKET.get(key)).toBeNull();
   });
 });
@@ -580,7 +794,16 @@ describe("sending files along with a message", () => {
 describe("listing received and sent mail", () => {
   async function compose() {
     const res = await worker.fetch(
-      req("/api/outbox", { method: "POST", headers: H, body: JSON.stringify({ fromAddress: aliasAddress, to: ["a@b.example"], subject: "Sent note", text: "hi" }) }),
+      req("/api/outbox", {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["a@b.example"],
+          subject: "Sent note",
+          text: "hi",
+        }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -597,16 +820,26 @@ describe("listing received and sent mail", () => {
   it("shows sent mail when asked, carrying its delivery state", async () => {
     await seedIncoming();
     const outcome = await compose();
-    const items = (await j(await worker.fetch(req("/api/messages?direction=out"), TEST_ENV, CTX))).items;
+    const items = (await j(await worker.fetch(req("/api/messages?direction=out"), TEST_ENV, CTX)))
+      .items;
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ id: outcome.id, direction: "OUT", sendStatus: "QUEUED", aliasAddress });
+    expect(items[0]).toMatchObject({
+      id: outcome.id,
+      direction: "OUT",
+      sendStatus: "QUEUED",
+      aliasAddress,
+    });
   });
 
   it("finds sent mail by who it went to", async () => {
     await compose();
-    const items = (await j(await worker.fetch(req("/api/messages?direction=out&q=customer"), TEST_ENV, CTX))).items;
+    const items = (
+      await j(await worker.fetch(req("/api/messages?direction=out&q=customer"), TEST_ENV, CTX))
+    ).items;
     expect(items).toHaveLength(0);
-    const found = (await j(await worker.fetch(req("/api/messages?direction=out&q=b.example"), TEST_ENV, CTX))).items;
+    const found = (
+      await j(await worker.fetch(req("/api/messages?direction=out&q=b.example"), TEST_ENV, CTX))
+    ).items;
     expect(found).toHaveLength(1);
   });
 
@@ -623,8 +856,17 @@ describe("listing received and sent mail", () => {
   it("deletes a sent message's stored copy along with its row", async () => {
     const outcome = await compose();
     const stored = await row(outcome.id);
-    const res = await worker.fetch(req(`/api/messages/${outcome.id}`, { method: "DELETE", headers: { "x-mailvault": "1" } }), TEST_ENV, CTX);
-    expect(res.status).toBe(200);
+    const grant = await newGrant(DB, 60_000);
+    const res = await worker.fetch(
+      req(`/api/messages/${outcome.id}`, {
+        method: "DELETE",
+        headers: { "x-mailvault": "1", "x-mailvault-stepup": grant.token },
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(202);
+    await drainDeletionJobs(TEST_ENV);
     expect(await row(outcome.id)).toBeFalsy();
     expect(await BUCKET.get(stored.raw_r2_key)).toBeNull();
   });

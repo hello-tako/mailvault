@@ -3,6 +3,10 @@
   "name": "mail-vault",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-02",
+  // Reviewed runtime change, kept separate from the date: the pinned mailauth DKIM verifier
+  // imports Node built-ins that workerd provides only with this flag. See
+  // docs/sender-auth/MAILAUTH.md.
+  "compatibility_flags": ["nodejs_compat"],
   "logpush": false,
   "workers_dev": false,
 

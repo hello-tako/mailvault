@@ -3,6 +3,7 @@ import type { Env } from "../../src/env";
 import { ingestEmail } from "../../src/mail/ingest";
 import { deleteMessage } from "../../src/db/messages";
 import { listMessages } from "../../src/db/messages";
+import { requestMessageDeletion, drainDeletionJobs } from "../../src/db/deletions";
 import {
   backfill,
   embedText,
@@ -25,12 +26,17 @@ import { getTestBindings, type TestBindings } from "./_mf";
 
 function fakeStore() {
   const vectors = new Map<string, number[]>();
+  const deleteBatchSizes: number[] = [];
   const ai = {
     run: async (_model: string, input: { text: string[] | string }) => {
       const texts = Array.isArray(input.text) ? input.text : [input.text];
       // A deterministic "embedding": the first eight bytes of a hash, repeated. Enough to
       // prove the plumbing without pretending to be a model.
-      return { data: texts.map((t) => Array.from({ length: 1024 }, (_, i) => (t.charCodeAt(i % t.length) + i) / 1000)) };
+      return {
+        data: texts.map((t) =>
+          Array.from({ length: 1024 }, (_, i) => (t.charCodeAt(i % t.length) + i) / 1000),
+        ),
+      };
     },
   };
   const vectorize = {
@@ -39,12 +45,15 @@ function fakeStore() {
       return { count: args.length, upsertCount: args.length, insertCount: 0 };
     },
     deleteByIds: async (ids: string[]) => {
+      deleteBatchSizes.push(ids.length);
       for (const id of ids) vectors.delete(id);
       return { deleteCount: ids.length };
     },
-    query: async () => ({ matches: [...vectors.keys()].map((id) => ({ id, score: 0.9, namespace: "" })) }),
+    query: async () => ({
+      matches: [...vectors.keys()].map((id) => ({ id, score: 0.9, namespace: "" })),
+    }),
   };
-  return { vectors, ai, vectorize };
+  return { vectors, ai, vectorize, deleteBatchSizes };
 }
 
 let bindings: TestBindings;
@@ -92,15 +101,19 @@ async function deliver(to: string, subject: string, body: string, messageId: str
 
 async function seedAlias(address: string) {
   const domainId = crypto.randomUUID();
+  const aliasId = crypto.randomUUID();
   const [local, domain] = address.split("@");
   await DB.prepare(
     `INSERT INTO domains (id, cloudflare_zone_id, name, zone_status, zone_type, mail_status) VALUES (?1, ?2, ?3, 'active', 'full', 'READY')`,
   )
     .bind(domainId, `zone-${domainId.slice(0, 8)}`, domain)
     .run();
-  await DB.prepare(`INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, 'ACTIVE')`)
-    .bind(crypto.randomUUID(), domainId, local, address)
+  await DB.prepare(
+    `INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, ?3, ?4, 'ACTIVE')`,
+  )
+    .bind(aliasId, domainId, local, address)
     .run();
+  return { domainId, aliasId };
 }
 
 beforeAll(async () => {
@@ -112,6 +125,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   store = fakeStore();
   ENV = withBindings();
+  await DB.prepare(`DELETE FROM semantic_index_leases`).run();
+  await DB.prepare(`DELETE FROM deletion_jobs`).run();
   await DB.prepare(`DELETE FROM attachments`).run();
   await DB.prepare(`DELETE FROM messages`).run();
   await DB.prepare(`DELETE FROM aliases`).run();
@@ -171,7 +186,63 @@ describe("the opt-in", () => {
 
     await indexIfEnabled(ENV, id);
     expect(store.vectors.has(id)).toBe(true);
-    expect((await indexedCount(DB))).toEqual({ indexed: 1, total: 1 });
+    expect(await indexedCount(DB)).toEqual({ indexed: 1, total: 1 });
+  });
+
+  it("defers deletion while a Vectorize upsert is in flight", async () => {
+    await seedAlias("race@notify.example");
+    await setSemanticEnabled(DB, true);
+    const stored = await deliver("race@notify.example", "Racing index", "body", "race-1");
+    if (stored.status !== "stored") throw new Error("message was not stored");
+
+    let started!: () => void;
+    let release!: () => void;
+    const upsertStarted = new Promise<void>((resolve) => (started = resolve));
+    const upsertGate = new Promise<void>((resolve) => (release = resolve));
+    const vectors = store.vectors;
+    const vectorize = {
+      ...store.vectorize,
+      upsert: async (entries: Array<{ id: string; values: number[] }>) => {
+        started();
+        await upsertGate;
+        for (const entry of entries) vectors.set(entry.id, entry.values);
+        return { count: entries.length, upsertCount: entries.length, insertCount: 0 };
+      },
+    } as unknown as Env["VECTORIZE"];
+    const env = { ...ENV, VECTORIZE: vectorize } as Env;
+    const indexing = indexStoredMessage(env, stored.messageId);
+    await upsertStarted;
+
+    const queued = await requestMessageDeletion(DB, stored.messageId);
+    expect(queued).toMatchObject({ found: true, state: "PENDING" });
+    const rawKey = await DB.prepare(`SELECT raw_r2_key FROM messages WHERE id = ?1`)
+      .bind(stored.messageId)
+      .first<string>("raw_r2_key");
+    const job = await DB.prepare(`SELECT vector_id FROM deletion_jobs WHERE message_id = ?1`)
+      .bind(stored.messageId)
+      .first<{ vector_id: string | null }>();
+    expect(job?.vector_id).toBe(stored.messageId);
+
+    const waiting = await drainDeletionJobs(env);
+    expect(waiting.deferred).toBe(1);
+    expect(
+      await DB.prepare(`SELECT id FROM messages WHERE id = ?1`).bind(stored.messageId).first(),
+    ).not.toBeNull();
+    expect(await BUCKET.get(rawKey!)).not.toBeNull();
+
+    release();
+    expect(await indexing).toBe(false);
+    expect(vectors.has(stored.messageId)).toBe(true);
+    await DB.prepare(`UPDATE deletion_jobs SET next_attempt_at = ?2 WHERE message_id = ?1`)
+      .bind(stored.messageId, new Date(0).toISOString())
+      .run();
+    const completed = await drainDeletionJobs(env);
+    expect(completed.completed).toBe(1);
+    expect(vectors.has(stored.messageId)).toBe(false);
+    expect(
+      await DB.prepare(`SELECT id FROM messages WHERE id = ?1`).bind(stored.messageId).first(),
+    ).toBeNull();
+    expect(await BUCKET.get(rawKey!)).toBeNull();
   });
 
   it("finds by meaning through the same list, without losing keyword matches", async () => {
@@ -184,7 +255,14 @@ describe("the opt-in", () => {
     const ids = await searchMessageIds(ENV, "the invoice from the phone place");
     expect(ids).toContain(id);
 
-    const merged = await listMessages(DB, { filter: "all", archived: "active", limit: 10, offset: 0, q: "phone", semanticIds: ids });
+    const merged = await listMessages(DB, {
+      filter: "all",
+      archived: "active",
+      limit: 10,
+      offset: 0,
+      q: "phone",
+      semanticIds: ids,
+    });
     expect(merged.items.map((m) => m.id)).toContain(id);
   });
 
@@ -214,6 +292,37 @@ describe("the opt-in", () => {
     expect(store.vectors.size).toBe(0);
     expect((await indexedCount(DB)).indexed).toBe(0);
     expect(await semanticEnabled(DB)).toBe(false);
+  });
+
+  it("purges indexed vectors in bounded pages", async () => {
+    const { domainId, aliasId } = await seedAlias("many@notify.example");
+    const ids = Array.from({ length: 205 }, () => crypto.randomUUID());
+    for (let start = 0; start < ids.length; start += 25) {
+      const batch = ids.slice(start, start + 25);
+      await DB.batch(
+        batch.map((id, index) =>
+          DB.prepare(
+            `INSERT INTO messages (id, domain_id, alias_id, dedupe_key, envelope_to, received_at,
+              raw_r2_key, embedded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+          ).bind(
+            id,
+            domainId,
+            aliasId,
+            `indexed-${id}`,
+            "many@notify.example",
+            new Date(Date.now() + start + index).toISOString(),
+            `raw/${id}`,
+            new Date().toISOString(),
+          ),
+        ),
+      );
+      for (const id of batch) store.vectors.set(id, [0]);
+    }
+
+    expect(await purgeIndex(ENV)).toBe(ids.length);
+    expect(store.vectors.size).toBe(0);
+    expect(store.deleteBatchSizes).toEqual([100, 100, 5]);
+    expect((await indexedCount(DB)).indexed).toBe(0);
   });
 
   it("removes the embedding when the owner deletes the message", async () => {

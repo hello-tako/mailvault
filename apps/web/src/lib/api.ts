@@ -84,7 +84,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const err = (body as { error?: { code?: string; message?: string; details?: unknown } })?.error;
-    throw new ApiClientError(res.status, err?.code ?? "ERROR", err?.message ?? `Request failed (${res.status})`, err?.details);
+    throw new ApiClientError(
+      res.status,
+      err?.code ?? "ERROR",
+      err?.message ?? `Request failed (${res.status})`,
+      err?.details,
+    );
   }
   return body as T;
 }
@@ -99,9 +104,15 @@ function mutation(body?: unknown, method = "POST"): RequestInit {
   };
 }
 
+function sendingMutation(body: unknown, key: string): RequestInit {
+  const init = mutation(body);
+  return { ...init, headers: { ...init.headers, "Idempotency-Key": key } };
+}
+
 function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") sp.set(k, String(v));
+  for (const [k, v] of Object.entries(params))
+    if (v !== undefined && v !== null && v !== "") sp.set(k, String(v));
   const s = sp.toString();
   return s ? `?${s}` : "";
 }
@@ -112,7 +123,8 @@ export const api = {
 
   listDomains: () => request<{ items: Domain[] }>("/domains"),
   syncDomains: () => request<{ discovered: number; items: Domain[] }>("/domains/sync", mutation()),
-  verifyDomains: () => request<{ report: DriftReport; items: Domain[] }>("/domains/verify", mutation()),
+  verifyDomains: () =>
+    request<{ report: DriftReport; items: Domain[] }>("/domains/verify", mutation()),
   preflightDomains: (zoneIds: string[]) =>
     request<{ results: PreflightResult[] }>("/domains/preflight", mutation({ zoneIds })),
   /** Both takeover flags are explicit, per-request confirmations of a destructive change. */
@@ -120,15 +132,24 @@ export const api = {
     zoneIds: string[],
     flags: { allowCatchAllTakeover?: boolean; allowMxTakeover?: boolean } = {},
   ) =>
-    request<{ results: ProvisionOutcome[] }>("/domains/provision", mutation({
-      zoneIds,
-      allowCatchAllTakeover: flags.allowCatchAllTakeover ?? false,
-      allowMxTakeover: flags.allowMxTakeover ?? false,
-    })),
+    request<{ results: ProvisionOutcome[] }>(
+      "/domains/provision",
+      mutation({
+        zoneIds,
+        allowCatchAllTakeover: flags.allowCatchAllTakeover ?? false,
+        allowMxTakeover: flags.allowMxTakeover ?? false,
+      }),
+    ),
   retryDomain: (zoneId: string, allowCatchAllTakeover = false) =>
-    request<ProvisionOutcome>(`/domains/${encodeURIComponent(zoneId)}/retry`, mutation({ allowCatchAllTakeover })),
+    request<ProvisionOutcome>(
+      `/domains/${encodeURIComponent(zoneId)}/retry`,
+      mutation({ allowCatchAllTakeover }),
+    ),
   removeDomain: (zoneId: string) =>
-    request<{ removed: boolean }>(`/domains/${encodeURIComponent(zoneId)}`, mutation(undefined, "DELETE")),
+    request<{ removed: boolean }>(
+      `/domains/${encodeURIComponent(zoneId)}`,
+      mutation(undefined, "DELETE"),
+    ),
   setAuthPolicy: (zoneId: string, policy: AuthPolicy) =>
     request<{ zoneId: string; authPolicy: AuthPolicy }>(
       `/domains/${encodeURIComponent(zoneId)}/auth-policy`,
@@ -144,10 +165,15 @@ export const api = {
   /** Add back what an export wrote — additive only, and the answer says exactly what landed. */
   importAliases: (input: ImportAliasesInput) =>
     request<ImportAliasesResult>("/aliases/import", mutation(input)),
-  enableAlias: (id: string) => request<Alias>(`/aliases/${encodeURIComponent(id)}/enable`, mutation()),
-  disableAlias: (id: string) => request<Alias>(`/aliases/${encodeURIComponent(id)}/disable`, mutation()),
+  enableAlias: (id: string) =>
+    request<Alias>(`/aliases/${encodeURIComponent(id)}/enable`, mutation()),
+  disableAlias: (id: string) =>
+    request<Alias>(`/aliases/${encodeURIComponent(id)}/disable`, mutation()),
   deleteAlias: (id: string, purgeMessages: boolean) =>
-    request<{ deleted: boolean }>(`/aliases/${encodeURIComponent(id)}`, mutation({ purgeMessages }, "DELETE")),
+    request<{ deleted: boolean; state?: string }>(
+      `/aliases/${encodeURIComponent(id)}`,
+      mutation({ purgeMessages }, "DELETE"),
+    ),
 
   /**
    * Portal links for one alias. `create` is the only call that ever returns the token, so the
@@ -166,9 +192,12 @@ export const api = {
   listMessages: (query: Partial<MessageListQuery>) =>
     request<Paginated<MessageSummary> & { nextCursor: string | null }>(`/messages${qs({ ...query })}`),
   /** One conversation: received and sent rows interleaved, oldest first. */
-  thread: (id: string) => request<{ id: string; items: MessageSummary[] }>(`/threads/${encodeURIComponent(id)}`),
+  thread: (id: string) =>
+    request<{ id: string; items: MessageSummary[] }>(`/threads/${encodeURIComponent(id)}`),
   getMessage: (id: string, remoteImages = false) =>
-    request<MessageDetail>(`/messages/${encodeURIComponent(id)}${qs({ remoteImages: remoteImages ? "1" : "" })}`),
+    request<MessageDetail>(
+      `/messages/${encodeURIComponent(id)}${qs({ remoteImages: remoteImages ? "1" : "" })}`,
+    ),
   setMessageRead: (id: string, isRead: boolean) =>
     request<{ id: string; isRead: boolean }>(`/messages/${encodeURIComponent(id)}/read`, {
       method: "PATCH",
@@ -186,24 +215,27 @@ export const api = {
   bulkMessages: (ids: string[], action: BulkMessageAction) =>
     request<BulkMessageResult>("/messages/bulk", mutation({ ids, action })),
   deleteMessage: (id: string) =>
-    request<{ deleted: boolean }>(`/messages/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      headers: { "x-mailvault": "1" },
-    }),
+    request<{ deleted: boolean; state: string }>(
+      `/messages/${encodeURIComponent(id)}`,
+      mutation(undefined, "DELETE"),
+    ),
 
   /** What may be sent, and how much is left today. */
   outboxCapabilities: () => request<OutboxCapabilities>("/outbox/capabilities"),
   /** Who this mailbox has actually corresponded with, for completing an address. */
-  recipients: (q: string) =>
-    request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
-  compose: (input: ComposeInput) => request<SendOutcome>("/outbox", mutation(input)),
-  reply: (id: string, input: ReplyInput) =>
-    request<SendOutcome>(`/messages/${encodeURIComponent(id)}/reply`, mutation(input)),
+  recipients: (q: string) => request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
+  compose: (input: ComposeInput, key: string) =>
+    request<SendOutcome>("/outbox", sendingMutation(input, key)),
+  reply: (id: string, input: ReplyInput, key: string) =>
+    request<SendOutcome>(`/messages/${encodeURIComponent(id)}/reply`, sendingMutation(input, key)),
 
   sendingPreview: (zoneId: string) =>
     request<SendingPreview>(`/domains/${encodeURIComponent(zoneId)}/sending`),
   refreshSending: () =>
-    request<{ items: { domain: string; via: string; status: string; error?: string }[] }>("/sending/refresh", mutation()),
+    request<{ items: { domain: string; via: string; status: string; error?: string }[] }>(
+      "/sending/refresh",
+      mutation(),
+    ),
   /** Every Email Sending name inside this zone, enabled or not. */
   sendingNames: (zoneId: string) =>
     request<{ items: { name: string; enabled: boolean; tag: string | null }[] }>(
@@ -225,7 +257,8 @@ export const api = {
   pushStatus: () => request<{ enabled: boolean; subscriptions: number }>("/push/status"),
   pushSubscribe: (input: { endpoint: string; p256dh: string; auth: string; userAgent?: string }) =>
     request<{ id: string }>("/push/subscribe", mutation(input)),
-  pushUnsubscribe: (endpoint: string) => request<{ removed: number }>("/push/unsubscribe", mutation({ endpoint })),
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ removed: number }>("/push/unsubscribe", mutation({ endpoint })),
   pushTest: () => request<PushOutcome>("/push/test", mutation()),
 
   securityStatus: () => request<SecurityStatus>("/security/status"),
@@ -233,23 +266,37 @@ export const api = {
   passkeyVerify: (input: { response: unknown; challenge: string; deviceLabel?: string }) =>
     request<{ passkey: Passkey }>("/security/passkeys/verify", mutation(input)),
   deletePasskey: (id: string) =>
-    request<{ removed: boolean }>(`/security/passkeys/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
+    request<{ removed: boolean }>(
+      `/security/passkeys/${encodeURIComponent(id)}`,
+      mutation(undefined, "DELETE"),
+    ),
   stepUpOptions: () => request<StepUpOptions>("/security/step-up/options", mutation()),
   stepUpVerify: (input: { response: unknown; challenge: string }) =>
-    request<{ token: string; expiresAt: string; seconds: number }>("/security/step-up/verify", mutation(input)),
+    request<{ token: string; expiresAt: string; seconds: number }>(
+      "/security/step-up/verify",
+      mutation(input),
+    ),
 
   listRules: () => request<{ items: Rule[] }>("/rules"),
   createRule: (input: { match: RuleMatch; action: RuleAction; enabled?: boolean }) =>
     request<Rule>("/rules", mutation(input)),
   updateRule: (id: string, patch: { match?: RuleMatch; action?: RuleAction; enabled?: boolean }) =>
     request<Rule>(`/rules/${encodeURIComponent(id)}`, mutation(patch, "PATCH")),
-  deleteRule: (id: string) => request<{ removed: boolean }>(`/rules/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
+  deleteRule: (id: string) =>
+    request<{ removed: boolean }>(
+      `/rules/${encodeURIComponent(id)}`,
+      mutation(undefined, "DELETE"),
+    ),
   addressReuse: () => request<{ items: AddressReuse[] }>("/report/address-reuse"),
 
   semanticStatus: () => request<SemanticStatus>("/semantic"),
   semanticSet: (enabled: boolean) =>
-    request<{ enabled: boolean; indexed: number; total: number; purged: number }>("/semantic", mutation({ enabled })),
-  semanticBackfill: () => request<{ indexed: number; remaining: number }>("/semantic/backfill", mutation()),
+    request<{ enabled: boolean; indexed: number; total: number; purged: number }>(
+      "/semantic",
+      mutation({ enabled }),
+    ),
+  semanticBackfill: () =>
+    request<{ indexed: number; remaining: number }>("/semantic/backfill", mutation()),
 };
 
 /** What the server says about its own ability to send, and today's budget. */

@@ -105,6 +105,8 @@ export type MessageDirection = (typeof MessageDirection)[keyof typeof MessageDir
  * per recipient rather than as the message's own status.
  */
 export const SendStatus = {
+  Preparing: "PREPARING",
+  Unknown: "UNKNOWN",
   Queued: "QUEUED",
   Deferred: "DEFERRED",
   Delivered: "DELIVERED",

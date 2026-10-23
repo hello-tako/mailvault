@@ -5,6 +5,7 @@ import globals from "globals";
 export default tseslint.config(
   {
     ignores: [
+      ".hoplite/**",
       "**/node_modules/**",
       "**/dist/**",
       "**/.wrangler/**",

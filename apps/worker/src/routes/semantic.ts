@@ -4,6 +4,7 @@ import type { AppEnv } from "../app-env";
 import { badRequest } from "../lib/errors";
 import { log } from "../lib/logging";
 import { actorOf, readJson } from "./_helpers";
+import { requireIrreversibleStepUp, STEP_UP_HEADER } from "../security/irreversible";
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
@@ -40,6 +41,7 @@ export const semanticRoute = new Hono<AppEnv>()
   .post("/api/semantic", async (c) => {
     const { enabled } = await readJson(c, Toggle);
     if (!c.env.AI || !c.env.VECTORIZE) throw badRequest("This deployment has no AI or vector index bound.");
+    if (!enabled) await requireIrreversibleStepUp(c.env.DB, c.req.header(STEP_UP_HEADER), "semantic.purge");
     await setSemanticEnabled(c.env.DB, enabled);
     let purged = 0;
     if (!enabled) purged = await purgeIndex(c.env);

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openFold } from "./fixtures";
+import { deleteTestMessage, openFold } from "./fixtures";
 
 /*
  * Sending, checked in the browser.
@@ -14,7 +14,9 @@ import { openFold } from "./fixtures";
 
 const DOMAIN = "demo.example";
 
-test("desktop: the composer offers only aliases on a domain that may sign mail", async ({ page }) => {
+test("desktop: the composer offers only aliases on a domain that may sign mail", async ({
+  page,
+}) => {
   await page.goto("/#/inbox");
   const compose = page.getByRole("button", { name: "Compose" });
   await expect(compose).toBeEnabled();
@@ -46,7 +48,9 @@ test("desktop: composing goes out, and the Sent row is the receipt", async ({ pa
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await dialog.getByLabel("To", { exact: true }).fill(recipient);
   await dialog.getByLabel("Subject", { exact: true }).fill(subject);
-  await dialog.getByLabel("Message", { exact: true }).fill("Written in the browser, accepted by the runtime.");
+  await dialog
+    .getByLabel("Message", { exact: true })
+    .fill("Written in the browser, accepted by the runtime.");
   await dialog.getByRole("button", { name: "Send" }).click();
 
   // The composer closes, the list moves to Sent, and the row that answers for the send is
@@ -68,13 +72,12 @@ test("desktop: composing goes out, and the Sent row is the receipt", async ({ pa
   // Take the message out again. The local database survives between runs, and a leftover
   // sent row would move the dashboard's mailbox count for whichever suite reads it next.
   const id = await row.getAttribute("data-msg-id");
-  await page.evaluate(async (messageId) => {
-    const res = await fetch(`/api/messages/${messageId}`, { method: "DELETE", headers: { "x-mailvault": "1" } });
-    if (!res.ok) throw new Error(`cleanup ${messageId}: ${res.status}`);
-  }, id);
+  await deleteTestMessage(page, id);
 });
 
-test("desktop: a composed message carries a file, and the vault keeps its copy", async ({ page }) => {
+test("desktop: a composed message carries a file, and the vault keeps its copy", async ({
+  page,
+}) => {
   const subject = `Invoice with a file ${Date.now()}`;
   const recipient = `probe-${Date.now()}@example.com`;
   const filename = "Hoá đơn tháng 9.txt";
@@ -116,7 +119,11 @@ test("desktop: a composed message carries a file, and the vault keeps its copy",
   const href = await download.getAttribute("href");
   const fetched = await page.evaluate(async (path) => {
     const res = await fetch(path as string);
-    return { status: res.status, disposition: res.headers.get("content-disposition"), body: await res.text() };
+    return {
+      status: res.status,
+      disposition: res.headers.get("content-disposition"),
+      body: await res.text(),
+    };
   }, href);
   expect(fetched.status).toBe(200);
   // A safe name on the way out of storage, and never inline.
@@ -124,10 +131,7 @@ test("desktop: a composed message carries a file, and the vault keeps its copy",
   expect(fetched.body).toBe(contents);
 
   const id = await row.getAttribute("data-msg-id");
-  await page.evaluate(async (messageId) => {
-    const res = await fetch(`/api/messages/${messageId}`, { method: "DELETE", headers: { "x-mailvault": "1" } });
-    if (!res.ok) throw new Error(`cleanup ${messageId}: ${res.status}`);
-  }, id);
+  await deleteTestMessage(page, id);
 });
 
 test("desktop: a reply names its recipient as a fact, not as a field to edit", async ({ page }) => {
@@ -146,7 +150,9 @@ test("desktop: a reply names its recipient as a fact, not as a field to edit", a
   await expect(dialog.getByText("news-d7k2q1@demo.example")).toBeVisible();
 });
 
-test("phone: the compose sheet fits the viewport and its fields stay thumb-sized", async ({ page }) => {
+test("phone: the compose sheet fits the viewport and its fields stay thumb-sized", async ({
+  page,
+}) => {
   await page.goto("/#/inbox");
   await page.getByRole("button", { name: "Compose" }).click();
   const dialog = page.getByRole("dialog", { name: "New message" });
@@ -161,4 +167,36 @@ test("phone: the compose sheet fits the viewport and its fields stay thumb-sized
     const size = await dialog.getByLabel(label).evaluate((el) => getComputedStyle(el).fontSize);
     expect(parseFloat(size)).toBeGreaterThanOrEqual(16);
   }
+});
+
+test("desktop: a lost accepted response retries with the same send key", async ({ page }) => {
+  const keys: string[] = [];
+  let accepted = false;
+  await page.route("**/api/outbox", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    keys.push(route.request().headers()["idempotency-key"]);
+    if (!accepted) {
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      accepted = true;
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  const subject = `Retry receipt ${Date.now()}`;
+  await page.goto("/#/inbox");
+  await page.getByRole("button", { name: "Compose" }).click();
+  const dialog = page.getByRole("dialog", { name: "New message" });
+  await dialog.getByLabel("To", { exact: true }).fill("retry@example.net");
+  await dialog.getByLabel("Subject", { exact: true }).fill(subject);
+  await dialog.getByLabel("Message", { exact: true }).fill("Synthetic retry fixture");
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBe(keys[0]);
+  const row = page.locator(".msg").filter({ hasText: subject });
+  await expect(row).toHaveCount(1);
+  await deleteTestMessage(page, await row.getAttribute("data-msg-id"));
 });

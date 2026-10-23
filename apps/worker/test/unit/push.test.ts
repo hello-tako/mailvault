@@ -25,8 +25,18 @@ function b64url(bytes: Uint8Array): string {
 }
 
 describe("push endpoint validation", () => {
-  it("accepts only https endpoints of sane length", () => {
-    expect(isUsableEndpoint("https://push.example.com/s/abc123")).toBe(true);
+  it("allows only documented browser push providers over HTTPS port 443", () => {
+    expect(isUsableEndpoint("https://fcm.googleapis.com/fcm/send/abc123")).toBe(true);
+    expect(isUsableEndpoint("https://updates.push.services.mozilla.com/wpush/v2/abc123")).toBe(true);
+    expect(isUsableEndpoint("https://wns2-par02p.notify.windows.com/w/?token=abc123")).toBe(true);
+    expect(isUsableEndpoint("https://web.push.apple.com/abc123")).toBe(true);
+    expect(isUsableEndpoint("https://push.example.com/s/abc123")).toBe(false);
+    expect(isUsableEndpoint("https://fcm.googleapis.com.attacker.example/send/abc123")).toBe(false);
+    expect(isUsableEndpoint("https://fcm.googleapis.com:8443/fcm/send/abc123")).toBe(false);
+    expect(isUsableEndpoint("https://user:secret@fcm.googleapis.com/fcm/send/abc123")).toBe(false);
+    expect(isUsableEndpoint("https://127.0.0.1/push")).toBe(false);
+    expect(isUsableEndpoint("https://2130706433/push")).toBe(false);
+    expect(isUsableEndpoint("https://[::1]/push")).toBe(false);
     expect(isUsableEndpoint("http://push.example.com/s/abc")).toBe(false);
     expect(isUsableEndpoint("not a url")).toBe(false);
     expect(isUsableEndpoint("")).toBe(false);
@@ -113,8 +123,8 @@ describe("pushToAll is payload-free and self-healing", () => {
     const { jwk } = await freshJwk();
     const env = { ...VAPID_ENV, VAPID_PRIVATE_KEY: JSON.stringify(jwk) } as unknown as Env;
     const rows: FakePushRow[] = [
-      { id: "p1", endpoint: "https://push.one/s/alive", p256dh: "KEY", auth: "AUTH", user_agent: null },
-      { id: "p2", endpoint: "https://push.two/s/dead", p256dh: "KEY", auth: "AUTH", user_agent: null },
+      { id: "p1", endpoint: "https://fcm.googleapis.com/s/alive", p256dh: "KEY", auth: "AUTH", user_agent: null },
+      { id: "p2", endpoint: "https://updates.push.services.mozilla.com/s/dead", p256dh: "KEY", auth: "AUTH", user_agent: null },
     ];
     const { db } = fakePushDb(rows);
     const calls: { url: string; init: RequestInit }[] = [];
@@ -140,6 +150,53 @@ describe("pushToAll is payload-free and self-healing", () => {
       // "new mail" into "mail that arrived two minutes ago".
       expect(Object.keys(call.init.headers as Record<string, string>)).not.toContain("Urgency");
     }
+  });
+
+  it("does not send to legacy subscriptions outside the provider allowlist", async () => {
+    const { jwk } = await freshJwk();
+    const env = { ...VAPID_ENV, VAPID_PRIVATE_KEY: JSON.stringify(jwk) } as unknown as Env;
+    const { db } = fakePushDb([
+      { id: "legacy", endpoint: "https://127.0.0.1/admin", p256dh: "KEY", auth: "AUTH", user_agent: null },
+    ]);
+    const calls: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      calls.push(String(url));
+      return new Response(null, { status: 201 });
+    }) as unknown as typeof fetch;
+
+    const outcome = await pushToAll(env, db, fakeFetch);
+
+    expect(outcome).toMatchObject({ sent: 0, failed: 1 });
+    expect(calls).toEqual([]);
+  });
+
+  it("fails closed on redirects without forwarding VAPID authorization", async () => {
+    const { jwk } = await freshJwk();
+    const env = { ...VAPID_ENV, VAPID_PRIVATE_KEY: JSON.stringify(jwk) } as unknown as Env;
+    const endpoint = "https://fcm.googleapis.com/fcm/send/abc";
+    const redirected = "https://attacker.example/collect";
+    const { db } = fakePushDb([
+      { id: "redirect", endpoint, p256dh: "KEY", auth: "AUTH", user_agent: null },
+    ]);
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fakeFetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      if (url === endpoint && init.redirect === "error") throw new TypeError("redirect blocked");
+      if (url === endpoint) return new Response(null, { status: 302, headers: { location: redirected } });
+      return new Response(null, { status: 201 });
+    }) as unknown as typeof fetch;
+
+    const outcome = await pushToAll(env, db, fakeFetch);
+
+    expect(outcome).toMatchObject({ sent: 0, failed: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(endpoint);
+    expect(calls[0]?.init.redirect).toBe("error");
+    const auth = (calls[0]?.init.headers as Record<string, string>).Authorization ?? "";
+    expect(auth).toMatch(/^vapid t=[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+\./);
+    const payload = JSON.parse(atob(auth.split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/")));
+    expect(payload.aud).toBe("https://fcm.googleapis.com");
+    expect(calls.some((call) => call.url === redirected)).toBe(false);
   });
 
   it("upserts a re-subscribed endpoint instead of duplicating it", async () => {

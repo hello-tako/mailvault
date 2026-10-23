@@ -65,7 +65,10 @@ export function toAlias(row: AliasRow): Alias {
 
 function strongestCode(codes: ExtractedCode[]): ExtractedCode | null {
   if (codes.length === 0) return null;
-  return codes.reduce((best, c) => (c.confidence > best.confidence ? c : best), codes[0] as ExtractedCode);
+  return codes.reduce(
+    (best, c) => (c.confidence > best.confidence ? c : best),
+    codes[0] as ExtractedCode,
+  );
 }
 
 export function toMessageSummary(row: MessageRow): MessageSummary {
@@ -84,6 +87,7 @@ export function toMessageSummary(row: MessageRow): MessageSummary {
     subject: row.subject,
     preview: row.preview,
     receivedAt: row.received_at,
+    headerDate: row.header_date ?? null,
     isRead: row.is_read === 1,
     // Mail stored before the column existed reads as unstarred rather than undefined.
     starred: Number(row.starred ?? 0) === 1,

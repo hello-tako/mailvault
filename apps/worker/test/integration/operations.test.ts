@@ -4,6 +4,8 @@ import type { Env } from "../../src/env";
 import worker from "../../src/index";
 import { ingestEmail } from "../../src/mail/ingest";
 import { newId } from "../../src/lib/util";
+import { newGrant } from "../../src/db/security";
+import { drainDeletionJobs } from "../../src/db/deletions";
 import { getTestBindings, type TestBindings } from "./_mf";
 import { SendStatus } from "@mailvault/shared";
 
@@ -21,19 +23,33 @@ let bindings: TestBindings;
 let TEST_ENV: Env;
 let DB: D1Database;
 let BUCKET: R2Bucket;
-const CTX = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+const CTX = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 const j = async (r: Response): Promise<any> => r.json();
 const H = { "x-mailvault": "1", "content-type": "application/json" };
 const ALIAS = "shop-b7@mailbox.example";
 const DELIVERY_QUEUE = "mail-delivery-events";
 
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://localhost${path}`, { ...init, headers: { origin: "http://localhost", ...(init.headers ?? {}) } });
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers: {
+      origin: "http://localhost",
+      "Idempotency-Key": crypto.randomUUID(),
+      ...(init.headers ?? {}),
+    },
+  });
 }
 
 const get = (path: string) => worker.fetch(req(path), TEST_ENV, CTX);
-const post = (path: string, body: unknown) =>
-  worker.fetch(req(path, { method: "POST", headers: H, body: JSON.stringify(body) }), TEST_ENV, CTX);
+const post = (path: string, body: unknown, extraHeaders: Record<string, string> = {}) =>
+  worker.fetch(
+    req(path, { method: "POST", headers: { ...H, ...extraHeaders }, body: JSON.stringify(body) }),
+    TEST_ENV,
+    CTX,
+  );
 
 /** A queue batch that records what the consumer decided to do with each message. */
 function batch(queue: string, bodies: unknown[]) {
@@ -51,7 +67,13 @@ function batch(queue: string, bodies: unknown[]) {
   };
 }
 
-async function deliver(over: { from: string; subject: string; body: string; messageId: string; at?: Date }) {
+async function deliver(over: {
+  from: string;
+  subject: string;
+  body: string;
+  messageId: string;
+  at?: Date;
+}) {
   const head = [
     `From: ${over.from}`,
     `To: ${ALIAS}`,
@@ -87,7 +109,9 @@ beforeAll(async () => {
   TEST_ENV = bindings.env as unknown as Env;
   DB = bindings.db;
   BUCKET = bindings.bucket;
-  TEST_ENV.EMAIL = { send: async () => ({ messageId: `<wire-${newId()}@mailbox.example>` }) } as unknown as SendEmail;
+  TEST_ENV.EMAIL = {
+    send: async () => ({ messageId: `<wire-${newId()}@mailbox.example>` }),
+  } as unknown as SendEmail;
 });
 
 afterAll(async () => {
@@ -96,7 +120,9 @@ afterAll(async () => {
 
 let domainId = "";
 beforeEach(async () => {
+  await DB.prepare(`DELETE FROM deletion_jobs`).run();
   await DB.prepare(`DELETE FROM message_recipients`).run();
+  await DB.prepare(`DELETE FROM outbound_jobs`).run();
   await DB.prepare(`DELETE FROM messages`).run();
   await DB.prepare(`DELETE FROM messages_fts`).run();
   await DB.prepare(`DELETE FROM aliases`).run();
@@ -109,8 +135,9 @@ beforeEach(async () => {
   )
     .bind(domainId, `zone-${domainId.slice(0, 8)}`)
     .run();
-  await DB
-    .prepare(`INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, 'shop-b7', ?3, 'ACTIVE')`)
+  await DB.prepare(
+    `INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, 'shop-b7', ?3, 'ACTIVE')`,
+  )
     .bind(aliasId, domainId, ALIAS)
     .run();
 });
@@ -119,7 +146,12 @@ describe("a selection acted on at once", () => {
   async function three() {
     const ids: string[] = [];
     for (const [i, from] of ["a@one.example", "b@two.example", "c@three.example"].entries()) {
-      const r = await deliver({ from, subject: `Note ${i}`, body: `Body ${i}`, messageId: `bulk-${i}` });
+      const r = await deliver({
+        from,
+        subject: `Note ${i}`,
+        body: `Body ${i}`,
+        messageId: `bulk-${i}`,
+      });
       ids.push((r as { messageId: string }).messageId);
     }
     return ids;
@@ -128,12 +160,17 @@ describe("a selection acted on at once", () => {
   it("marks read, starred and filed in one call each", async () => {
     const [first, second, third] = await three();
 
-    expect(await j(await post("/api/messages/bulk", { ids: [first, second], action: "read" }))).toMatchObject({
+    expect(
+      await j(await post("/api/messages/bulk", { ids: [first, second], action: "read" })),
+    ).toMatchObject({
       action: "read",
       affected: 2,
     });
     // The third is still unread, and the two that were marked report only what moved.
-    expect((await j(await post("/api/messages/bulk", { ids: [first, second], action: "read" }))).affected).toBe(0);
+    expect(
+      (await j(await post("/api/messages/bulk", { ids: [first, second], action: "read" })))
+        .affected,
+    ).toBe(0);
     const unread = await j(await get("/api/messages?filter=unread"));
     expect(unread.items.map((m: { id: string }) => m.id)).toEqual([third]);
 
@@ -154,14 +191,23 @@ describe("a selection acted on at once", () => {
 
   it("deletes the rows and the objects behind them", async () => {
     const [first, second] = await three();
-    const before = await DB.prepare(`SELECT raw_r2_key FROM messages WHERE id = ?1`).bind(first).first<{ raw_r2_key: string }>();
+    const before = await DB.prepare(`SELECT raw_r2_key FROM messages WHERE id = ?1`)
+      .bind(first)
+      .first<{ raw_r2_key: string }>();
     // Narrowing here is the point: a row with no raw key cannot prove the purge worked.
     if (!before) throw new Error("the stored row has no raw key to check against");
 
-    const res = await j(await post("/api/messages/bulk", { ids: [first, second], action: "delete" }));
+    const grant = await newGrant(DB, 60_000);
+    const response = await post(
+      "/api/messages/bulk",
+      { ids: [first, second], action: "delete" },
+      { "x-mailvault-stepup": grant.token },
+    );
+    expect(response.status).toBe(200);
+    const res = await j(response);
     expect(res).toMatchObject({ action: "delete", affected: 2 });
-    // Two objects per message here: raw plus parsed.
-    expect(res.r2ObjectsRemoved).toBe(4);
+    expect(res.r2ObjectsRemoved).toBe(0);
+    await drainDeletionJobs(TEST_ENV);
     expect((await j(await get("/api/messages"))).total).toBe(1);
     expect(await BUCKET.get(before.raw_r2_key)).toBeNull();
   });
@@ -169,25 +215,29 @@ describe("a selection acted on at once", () => {
   it("reports nothing changed for ids that do not exist", async () => {
     await three();
     expect(
-      (
-        await j(
-          await post("/api/messages/bulk", { ids: [newId(), newId()], action: "star" }),
-        )
-      ).affected,
+      (await j(await post("/api/messages/bulk", { ids: [newId(), newId()], action: "star" })))
+        .affected,
     ).toBe(0);
     expect((await j(await get("/api/messages"))).total).toBe(3);
   });
 
   it("refuses an empty selection and an unknown action", async () => {
     expect((await post("/api/messages/bulk", { ids: [], action: "read" })).status).toBe(400);
-    expect((await post("/api/messages/bulk", { ids: [newId()], action: "duplicate" })).status).toBe(400);
+    expect((await post("/api/messages/bulk", { ids: [newId()], action: "duplicate" })).status).toBe(
+      400,
+    );
   });
 });
 
 describe("the counts beside each view", () => {
   it("counts the mailbox, not the page", async () => {
     await deliver({ from: "a@one.example", subject: "One", body: "Body", messageId: "c-1" });
-    const second = (await deliver({ from: "b@two.example", subject: "Two", body: "Body", messageId: "c-2" })) as unknown as {
+    const second = (await deliver({
+      from: "b@two.example",
+      subject: "Two",
+      body: "Body",
+      messageId: "c-2",
+    })) as unknown as {
       messageId: string;
     };
     const sent = await composeTo(["friend@elsewhere.example"]);
@@ -214,7 +264,12 @@ describe("the counts beside each view", () => {
 
 describe("a query with operators in it", () => {
   beforeEach(async () => {
-    await deliver({ from: "billing@shop.example", subject: "Your order", body: "Your code is 441702", messageId: "o-1" });
+    await deliver({
+      from: "billing@shop.example",
+      subject: "Your order",
+      body: "Your code is 441702",
+      messageId: "o-1",
+    });
     await deliver({
       from: "marco@friend.example",
       subject: "Dinner on Friday",
@@ -257,12 +312,19 @@ describe("a query with operators in it", () => {
     // Two of the three are received mail, which is what a list with no direction shows.
     const past = await j(await get("/api/messages?q=after%3A2020-01-01"));
     expect(past.items).toHaveLength(2);
-    expect((await j(await get("/api/messages?q=after%3A2020-01-01&direction=all"))).items).toHaveLength(3);
+    expect(
+      (await j(await get("/api/messages?q=after%3A2020-01-01&direction=all"))).items,
+    ).toHaveLength(3);
   });
 });
 
 describe("a send that the other server answered", () => {
-  const event = (providerMessageId: string, recipient: string, status: string, extra: Record<string, unknown> = {}) => ({
+  const event = (
+    providerMessageId: string,
+    recipient: string,
+    status: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
     type: `cf.email.sending.message.${status}`,
     source: { type: "email.sending", zoneId: "z", domain: "mailbox.example" },
     payload: {
@@ -297,10 +359,13 @@ describe("a send that the other server answered", () => {
     const after = await j(await get(`/api/messages/${composed.id}`));
     // One of two arrived, the other refused: the summary has to be the refusal.
     expect(after.sendStatus).toBe(SendStatus.Bounced);
-    expect(after.recipients.find((r: { address: string }) => r.address === "marco@friend.example").status).toBe(
-      SendStatus.Delivered,
-    );
-    expect(after.recipients.find((r: { address: string }) => r.address === "other@friend.example")).toMatchObject({
+    expect(
+      after.recipients.find((r: { address: string }) => r.address === "marco@friend.example")
+        .status,
+    ).toBe(SendStatus.Delivered);
+    expect(
+      after.recipients.find((r: { address: string }) => r.address === "other@friend.example"),
+    ).toMatchObject({
       status: SendStatus.Bounced,
       smtpCode: "550",
       detail: "550 no such user",
@@ -314,9 +379,17 @@ describe("a send that the other server answered", () => {
     const composed = await composeTo(["marco@friend.example"]);
     const providerId = (await j(await get(`/api/messages/${composed.id}`))).providerMessageId;
 
-    await worker.queue(batch(DELIVERY_QUEUE, [event(providerId, "marco@friend.example", "delivered")]).batch, TEST_ENV, CTX);
+    await worker.queue(
+      batch(DELIVERY_QUEUE, [event(providerId, "marco@friend.example", "delivered")]).batch,
+      TEST_ENV,
+      CTX,
+    );
     // A retry report from an earlier attempt arriving after the delivery is not a rewind.
-    await worker.queue(batch(DELIVERY_QUEUE, [event(providerId, "marco@friend.example", "deferred")]).batch, TEST_ENV, CTX);
+    await worker.queue(
+      batch(DELIVERY_QUEUE, [event(providerId, "marco@friend.example", "deferred")]).batch,
+      TEST_ENV,
+      CTX,
+    );
     const after = await j(await get(`/api/messages/${composed.id}`));
     expect(after.sendStatus).toBe(SendStatus.Delivered);
     expect(after.recipients[0].status).toBe(SendStatus.Delivered);
@@ -324,7 +397,9 @@ describe("a send that the other server answered", () => {
 
   it("acknowledges an event for a message this mailbox never sent", async () => {
     await composeTo(["marco@friend.example"]);
-    const { batch: b, seen } = batch(DELIVERY_QUEUE, [event("no-such-id@mailbox.example", "marco@friend.example", "delivered")]);
+    const { batch: b, seen } = batch(DELIVERY_QUEUE, [
+      event("no-such-id@mailbox.example", "marco@friend.example", "delivered"),
+    ]);
     await worker.queue(b, TEST_ENV, CTX);
     // Retrying could never make the id known, so the batch is drained rather than looped.
     expect(seen).toEqual(["ack"]);

@@ -7,7 +7,7 @@ import { log } from "../lib/logging";
 import { nowIso } from "../lib/util";
 import { listDomains } from "../db/domains";
 import { countSentSince, listCorrespondents, listThread } from "../db/messages";
-import { sendOutbound } from "../mail/send";
+import { sendIdempotencyKey, sendOutbound } from "../mail/send";
 import { actorOf, parseQuery, readJson } from "./_helpers";
 
 const dayStart = () => `${nowIso().slice(0, 10)}T00:00:00.000Z`;
@@ -24,6 +24,7 @@ export const outboxRoute = new Hono<AppEnv>()
     const input = await readJson(c, ComposeInputSchema);
     const result = await sendOutbound(
       {
+        idempotencyKey: sendIdempotencyKey(c.req.header("Idempotency-Key")),
         fromAddress: input.fromAddress,
         to: input.to,
         cc: input.cc,
@@ -44,8 +45,7 @@ export const outboxRoute = new Hono<AppEnv>()
     if (!result.ok) {
       log.warn("outbox_refused", { actor: actorOf(c).email, code: result.code });
       // A refusal is the mailbox declining something the owner asked for, so it is a 400
-      // with the machine code kept: the compose screen translates `SPOOFED_PARENT` into a
-      // sentence, and a generic 500 would hide which rule stopped it.
+      // with the machine code kept so the compose screen can explain a reply-auth refusal.
       throw new AppError(400, result.code, result.message);
     }
     log.info("outbox_sent", { actor: actorOf(c).email, messageId: result.outcome.id });

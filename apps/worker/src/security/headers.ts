@@ -15,8 +15,7 @@ function isProd(env?: Env): boolean {
 }
 
 function securityHeaders(env: Env | undefined, url: string): Array<[string, string]> {
-  const pathname = new URL(url).pathname;
-  const isApi = pathname.startsWith("/api");
+  const isHttps = new URL(url).protocol === "https:";
 
   const headers: Array<[string, string]> = [
     ["X-Content-Type-Options", "nosniff"],
@@ -43,7 +42,7 @@ function securityHeaders(env: Env | undefined, url: string): Array<[string, stri
     ],
   ];
 
-  if (isProd(env) && isApi) {
+  if (isProd(env) && isHttps) {
     headers.push(["Strict-Transport-Security", "max-age=31536000; includeSubDomains"]);
   }
   return headers;
@@ -88,21 +87,21 @@ export function checkCsrf(c: Context): { ok: true } | { ok: false; reason: strin
   const origin = c.req.header("origin");
   const referer = c.req.header("referer");
   const configured = appOrigin(c.env as Env);
-  const reqHost = new URL(c.req.url).host;
+  const reqOrigin = new URL(c.req.url).origin;
 
-  const allowedHosts = new Set<string>([reqHost]);
+  const allowedOrigins = new Set<string>([reqOrigin]);
   if (configured) {
     try {
-      allowedHosts.add(new URL(configured).host);
+      allowedOrigins.add(new URL(configured).origin);
     } catch {
       /* ignore malformed APP_ORIGIN */
     }
   }
 
-  const source = origin ?? (referer ? new URL(referer).origin : null);
-  if (!source) return { ok: false, reason: "Missing Origin" };
+  if (!origin && !referer) return { ok: false, reason: "Missing Origin" };
   try {
-    if (!allowedHosts.has(new URL(source).host)) return { ok: false, reason: "Cross-origin request rejected" };
+    const source = new URL(origin ?? referer!).origin;
+    if (!allowedOrigins.has(source)) return { ok: false, reason: "Cross-origin request rejected" };
   } catch {
     return { ok: false, reason: "Invalid Origin" };
   }

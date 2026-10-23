@@ -61,14 +61,20 @@ function stubDb(found = true) {
 
 function stubClient(
   overrides: Partial<
-    Record<"listDnsRecords" | "getEmailRoutingStatus" | "enableEmailRouting", () => Promise<unknown>>
+    Record<"listDnsRecords" | "getEmailRoutingStatus" | "enableEmailRouting" | "getCatchAll", () => Promise<unknown>>
   > = {},
 ) {
   const mutations: string[] = [];
+  const deletedDnsIds = new Set<string>();
   const client = {
     hasToken: true,
     listAllZones: async () => [],
-    listDnsRecords: async () => (overrides.listDnsRecords ? ((await overrides.listDnsRecords()) as never) : []),
+    listDnsRecords: async (_zoneId: string, type?: string) => {
+      const records = overrides.listDnsRecords ? ((await overrides.listDnsRecords()) as never) : [];
+      return records.filter((record: { id?: string; type?: string }) =>
+        (!record.id || !deletedDnsIds.has(record.id)) && (!type || (record.type ? record.type === type : type === "MX")),
+      );
+    },
     getEmailRoutingStatus: async () =>
       overrides.getEmailRoutingStatus ? ((await overrides.getEmailRoutingStatus()) as never) : {},
     getEmailRoutingDns: async () => [],
@@ -79,12 +85,13 @@ function stubClient(
       }
       mutations.push("enableEmailRouting");
     },
-    getCatchAll: async () => null,
+    getCatchAll: async () => (overrides.getCatchAll ? ((await overrides.getCatchAll()) as never) : null),
     setCatchAllWorker: async () => {
       mutations.push("setCatchAllWorker");
     },
     deleteDnsRecord: async (_zoneId: string, id: string) => {
       mutations.push(`deleteDnsRecord:${id}`);
+      deletedDnsIds.add(id);
     },
   } as unknown as CloudflareClient;
   return { client, mutations };
@@ -249,7 +256,7 @@ describe("owner-confirmed MX takeover", () => {
     });
     const { db } = stubDb();
 
-    await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true });
+    await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true, authorizeTakeover: async () => {} });
 
     expect(deletes(mutations)).toEqual(["deleteDnsRecord:mx-google"]);
   });
@@ -258,7 +265,7 @@ describe("owner-confirmed MX takeover", () => {
     const { client, mutations } = stubClient({ listDnsRecords: zoneDns });
     const { db, writes } = stubDb();
 
-    const out = await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true });
+    const out = await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true, authorizeTakeover: async () => {} });
 
     expect(deletes(mutations)).toEqual(["deleteDnsRecord:mx-google"]);
     expect(mutations).toContain("enableEmailRouting");
@@ -306,5 +313,51 @@ describe("owner-confirmed MX takeover", () => {
     expect(mutations).toEqual([]);
     expect(out.ok).toBe(false);
     expect(out.error).toContain("excluded from MailVault management");
+  });
+});
+
+describe("live takeover checks", () => {
+  it("does not delete an MX conflict that disappeared after the first preflight", async () => {
+    let reads = 0;
+    const { client, mutations } = stubClient({
+      listDnsRecords: async () => {
+        reads += 1;
+        return reads === 1
+          ? [{ id: "old-mx", type: "MX", name: "example.com", content: "aspmx.l.google.com", priority: 1 }]
+          : [{ id: "cf-mx", type: "MX", name: "example.com", content: "route1.mx.cloudflare.net", priority: 10 }];
+      },
+    });
+    const { db } = stubDb();
+    let authorized = 0;
+
+    const result = await provisionDomain(db, client, "z1", "mail-vault", {
+      authorizeTakeover: async () => void (authorized += 1),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(mutations.filter((mutation) => mutation.startsWith("deleteDnsRecord"))).toEqual([]);
+    expect(authorized).toBe(0);
+  });
+
+  it("does not replace a catch-all conflict that disappeared before the write", async () => {
+    let reads = 0;
+    const { client, mutations } = stubClient({
+      getCatchAll: async () => {
+        reads += 1;
+        return reads === 1
+          ? { enabled: true, actions: [{ type: "forward", value: ["elsewhere@example.net"] }] }
+          : null;
+      },
+    });
+    const { db } = stubDb();
+    let authorized = 0;
+
+    const result = await provisionDomain(db, client, "z1", "mail-vault", {
+      authorizeTakeover: async () => void (authorized += 1),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(mutations).toContain("setCatchAllWorker");
+    expect(authorized).toBe(0);
   });
 });

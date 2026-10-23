@@ -5,6 +5,7 @@ import worker from "../../src/index";
 import { ingestEmail } from "../../src/mail/ingest";
 import { newId } from "../../src/lib/util";
 import { getTestBindings, type TestBindings } from "./_mf";
+import { verifiedDkimPassFixture } from "./_auth-fixtures";
 
 /*
  * The parts of a mailbox that are felt rather than seen: a conversation arriving as one row,
@@ -16,12 +17,22 @@ let bindings: TestBindings;
 let TEST_ENV: Env;
 let DB: D1Database;
 let BUCKET: R2Bucket;
-const CTX = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+const CTX = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 const j = async (r: Response): Promise<any> => r.json();
 const H = { "x-mailvault": "1", "content-type": "application/json" };
 
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://localhost${path}`, { ...init, headers: { origin: "http://localhost", ...(init.headers ?? {}) } });
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers: {
+      origin: "http://localhost",
+      "Idempotency-Key": crypto.randomUUID(),
+      ...(init.headers ?? {}),
+    },
+  });
 }
 
 beforeAll(async () => {
@@ -86,6 +97,7 @@ async function deliver(over: {
 }
 
 beforeEach(async () => {
+  await DB.prepare(`DELETE FROM outbound_jobs`).run();
   await DB.prepare(`DELETE FROM messages`).run();
   await DB.prepare(`DELETE FROM messages_fts`).run();
   await DB.prepare(`DELETE FROM aliases`).run();
@@ -98,22 +110,37 @@ beforeEach(async () => {
   )
     .bind(domainId, `zone-${domainId.slice(0, 8)}`)
     .run();
-  await DB.prepare(`INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, 'shop-a1', ?3, 'ACTIVE')`)
+  await DB.prepare(
+    `INSERT INTO aliases (id, domain_id, local_part, address, status) VALUES (?1, ?2, 'shop-a1', ?3, 'ACTIVE')`,
+  )
     .bind(aliasId, domainId, ALIAS)
     .run();
 });
 
 describe("a conversation is one row", () => {
   async function exchange() {
-    const first = await deliver({ from: "billing@shop.example", subject: "Your order", body: "Order 44 is paid.", messageId: "m-1" });
+    const first = await deliver({
+      from: "billing@shop.example",
+      subject: "Your order",
+      body: "Order 44 is paid.",
+      messageId: "m-1",
+    });
     expect(first.status).toBe("stored");
     // The variant is narrowed by the status above, which is what the assertion is for.
     const rootId = (first as { messageId: string }).messageId;
+    // Test fixture supplies independent verifier evidence; raw MIME remains untrusted.
+    await DB.prepare(`UPDATE messages SET auth_verdict = 'TRUSTED', auth_json = ?2 WHERE id = ?1`)
+      .bind(rootId, verifiedDkimPassFixture("shop.example"))
+      .run();
 
     // The owner answers from the alias, then the shop answers that.
     const composed = await j(
       await worker.fetch(
-        req(`/api/messages/${rootId}/reply`, { method: "POST", headers: H, body: JSON.stringify({ text: "Where is it?" }) }),
+        req(`/api/messages/${rootId}/reply`, {
+          method: "POST",
+          headers: H,
+          body: JSON.stringify({ text: "Where is it?" }),
+        }),
         TEST_ENV,
         CTX,
       ),
@@ -139,10 +166,14 @@ describe("a conversation is one row", () => {
     // Default list is received mail only — that is what an inbox is.
     const flat = await j(await worker.fetch(req("/api/messages"), TEST_ENV, CTX));
     expect(flat.total).toBe(2);
-    const everything = await j(await worker.fetch(req("/api/messages?direction=all"), TEST_ENV, CTX));
+    const everything = await j(
+      await worker.fetch(req("/api/messages?direction=all"), TEST_ENV, CTX),
+    );
     expect(everything.total).toBe(3);
 
-    const grouped = await j(await worker.fetch(req("/api/messages?threaded=true&direction=all"), TEST_ENV, CTX));
+    const grouped = await j(
+      await worker.fetch(req("/api/messages?threaded=true&direction=all"), TEST_ENV, CTX),
+    );
     expect(grouped.total, JSON.stringify(grouped)).toBe(1);
     expect(grouped.items).toHaveLength(1);
     expect(grouped.items[0]).toMatchObject({ threadRootId: rootId, threadCount: 3 });
@@ -152,8 +183,18 @@ describe("a conversation is one row", () => {
   });
 
   it("keeps two conversations apart when they happen to share a subject", async () => {
-    await deliver({ from: "one@shop.example", subject: "Invoice", body: "For customer one.", messageId: "i-1" });
-    await deliver({ from: "two@shop.example", subject: "Invoice", body: "For customer two.", messageId: "i-2" });
+    await deliver({
+      from: "one@shop.example",
+      subject: "Invoice",
+      body: "For customer one.",
+      messageId: "i-1",
+    });
+    await deliver({
+      from: "two@shop.example",
+      subject: "Invoice",
+      body: "For customer two.",
+      messageId: "i-2",
+    });
 
     const grouped = await j(await worker.fetch(req("/api/messages?threaded=true"), TEST_ENV, CTX));
     expect(grouped.total).toBe(2);
@@ -162,9 +203,16 @@ describe("a conversation is one row", () => {
 
   it("searches across every message but reports the conversation once", async () => {
     const rootId = await exchange();
-    await deliver({ from: "other@vendor.example", subject: "Invoice for July", body: "Order 44 was cancelled.", messageId: "x-1" });
+    await deliver({
+      from: "other@vendor.example",
+      subject: "Invoice for July",
+      body: "Order 44 was cancelled.",
+      messageId: "x-1",
+    });
 
-    const hits = await j(await worker.fetch(req("/api/messages?q=44&threaded=true&direction=all"), TEST_ENV, CTX));
+    const hits = await j(
+      await worker.fetch(req("/api/messages?q=44&threaded=true&direction=all"), TEST_ENV, CTX),
+    );
     expect(hits.total, JSON.stringify(hits)).toBe(2);
     const mine = hits.items.find((m: any) => m.threadRootId === rootId);
     expect(mine.threadCount).toBe(3);
@@ -174,21 +222,36 @@ describe("a conversation is one row", () => {
 
   it("counts a thread once even when its messages are spread across tabs", async () => {
     await exchange();
-    const grouped = await j(await worker.fetch(req("/api/messages?threaded=true&direction=all"), TEST_ENV, CTX));
+    const grouped = await j(
+      await worker.fetch(req("/api/messages?threaded=true&direction=all"), TEST_ENV, CTX),
+    );
     expect(grouped.total).toBe(1);
-    const unthreaded = await j(await worker.fetch(req("/api/messages?direction=all"), TEST_ENV, CTX));
+    const unthreaded = await j(
+      await worker.fetch(req("/api/messages?direction=all"), TEST_ENV, CTX),
+    );
     expect(unthreaded.total).toBe(3);
   });
 });
 
 describe("the composer's address list", () => {
   it("offers who you have written to and who has written to you", async () => {
-    await deliver({ from: "billing@shop.example", fromDisplay: "Billing <billing@shop.example>", subject: "Order", body: "hi", messageId: "r-1" });
+    await deliver({
+      from: "billing@shop.example",
+      fromDisplay: "Billing <billing@shop.example>",
+      subject: "Order",
+      body: "hi",
+      messageId: "r-1",
+    });
     await worker.fetch(
       req("/api/outbox", {
         method: "POST",
         headers: H,
-        body: JSON.stringify({ fromAddress: ALIAS, to: ["customer@elsewhere.example"], subject: "Hello", text: "hi" }),
+        body: JSON.stringify({
+          fromAddress: ALIAS,
+          to: ["customer@elsewhere.example"],
+          subject: "Hello",
+          text: "hi",
+        }),
       }),
       TEST_ENV,
       CTX,
@@ -225,11 +288,16 @@ describe("unsubscribing", () => {
       subject: "Weekly digest",
       body: "Read all about it.",
       messageId: "u-1",
-      listUnsubscribe: "<https://digest.example/unsub/9f2>, <mailto:unsub@digest.example?subject=unsubscribe>",
+      listUnsubscribe:
+        "<https://digest.example/unsub/9f2>, <mailto:unsub@digest.example?subject=unsubscribe>",
       listUnsubscribePost: "List-Unsubscribe=One-Click",
     });
-    const stored = await DB.prepare(`SELECT id, list_unsubscribe, list_unsubscribe_post FROM messages WHERE provider_message_id = 'u-1@news@digest.example'`).first<any>();
-    const missing = await DB.prepare(`SELECT id, list_unsubscribe, list_unsubscribe_post FROM messages LIMIT 1`).first<any>();
+    const stored = await DB.prepare(
+      `SELECT id, list_unsubscribe, list_unsubscribe_post FROM messages WHERE provider_message_id = 'u-1@news@digest.example'`,
+    ).first<any>();
+    const missing = await DB.prepare(
+      `SELECT id, list_unsubscribe, list_unsubscribe_post FROM messages LIMIT 1`,
+    ).first<any>();
     const row = stored ?? missing;
     expect(row.list_unsubscribe).toContain("https://digest.example/unsub/9f2");
     expect(row.list_unsubscribe_post).toBe("List-Unsubscribe=One-Click");
@@ -240,19 +308,38 @@ describe("unsubscribing", () => {
   });
 
   it("leaves the fields empty for a sender who declared nothing", async () => {
-    const result = await deliver({ from: "billing@shop.example", subject: "Invoice", body: "hi", messageId: "u-2" });
-    const detail = await j(await worker.fetch(req(`/api/messages/${(result as any).messageId}`), TEST_ENV, CTX));
+    const result = await deliver({
+      from: "billing@shop.example",
+      subject: "Invoice",
+      body: "hi",
+      messageId: "u-2",
+    });
+    const detail = await j(
+      await worker.fetch(req(`/api/messages/${(result as any).messageId}`), TEST_ENV, CTX),
+    );
     expect(detail.listUnsubscribe).toBeNull();
     expect(detail.oneClickUnsubscribe).toBe(false);
   });
 });
 
 describe("time in the list", () => {
-  it("keeps received_at from the message's own Date header", async () => {
+  it("orders by receiver arrival and preserves the sender Date separately", async () => {
     const at = new Date("2026-03-04T05:06:07.000Z");
-    await deliver({ from: "old@shop.example", subject: "From the past", body: "hi", messageId: "t-1", at });
-    const row = await DB.prepare(`SELECT received_at FROM messages WHERE provider_message_id = 't-1@old@shop.example'`).first<any>();
-    const stored = row ?? (await DB.prepare(`SELECT received_at FROM messages LIMIT 1`).first<any>());
-    expect(new Date(stored.received_at).getTime()).toBe(at.getTime());
+    const arrivedBefore = Date.now();
+    const result = await deliver({
+      from: "old@shop.example",
+      subject: "From the past",
+      body: "hi",
+      messageId: "t-1",
+      at,
+    });
+    expect(result.status).toBe("stored");
+    const row = await DB.prepare(`SELECT received_at, header_date FROM messages WHERE id = ?1`)
+      .bind((result as { messageId: string }).messageId)
+      .first<{ received_at: string; header_date: string | null }>();
+    const receivedAt = Date.parse(row?.received_at ?? "");
+    expect(receivedAt).toBeGreaterThanOrEqual(arrivedBefore - 1000);
+    expect(receivedAt).toBeLessThanOrEqual(Date.now() + 1000);
+    expect(row?.header_date).toBe(at.toISOString());
   });
 });

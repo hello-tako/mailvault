@@ -1245,3 +1245,14 @@ tr:last-child td { border-bottom: 0; }
 .recip-status li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .recip-status .addr { font-family: var(--font-mono); overflow-wrap: anywhere; }
 .recip-status .detail { flex-basis: 100%; }
+
+/* The explanatory second line inside an auth ribbon — quieter than the verdict itself. */
+.ribbon-note {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 12px;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

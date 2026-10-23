@@ -1,3 +1,4 @@
+import { withStepUp } from "../lib/passkeys";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiClientError } from "../lib/api";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
@@ -11,7 +12,8 @@ import { IconAuto, IconMoon, IconSun } from "../components/Icons";
 
 type Status = { tone: "ok" | "error"; text: string } | null;
 
-const errText = (e: unknown) => (e instanceof ApiClientError ? e.message : e instanceof Error ? e.message : t("set.requestFailed"));
+const errText = (e: unknown) =>
+  e instanceof ApiClientError ? e.message : e instanceof Error ? e.message : t("set.requestFailed");
 
 /**
  * How the interface looks. One card, because language, light/dark and whether a message's
@@ -33,7 +35,12 @@ function AppearanceCard() {
         </span>
         <div className="seg" role="group" aria-label={t("set.langLabel")}>
           {LANGS.map((l: Lang) => (
-            <button key={l} type="button" className={current === l ? "active" : ""} onClick={() => setLang(l)}>
+            <button
+              key={l}
+              type="button"
+              className={current === l ? "active" : ""}
+              onClick={() => setLang(l)}
+            >
               {languageName(l)}
             </button>
           ))}
@@ -49,7 +56,12 @@ function AppearanceCard() {
           {THEME_CHOICES.map((c: ThemeChoice) => {
             const Glyph = c === "paper" ? IconSun : c === "graphite" ? IconMoon : IconAuto;
             return (
-              <button key={c} type="button" className={choice === c ? "active" : ""} onClick={() => setTheme(c)}>
+              <button
+                key={c}
+                type="button"
+                className={choice === c ? "active" : ""}
+                onClick={() => setTheme(c)}
+              >
                 <Glyph size={16} />
                 {t(`theme.${c}`)}
               </button>
@@ -152,7 +164,11 @@ function PasskeysCard() {
                       <div className="entity-name">{p.deviceLabel || t("set.passWord")}</div>
                       <div className="entity-facts">
                         <span>{t("set.added", { at: relativeTime(p.createdAt) })}</span>
-                        <span>{p.lastUsedAt ? t("set.lastUsed", { at: relativeTime(p.lastUsedAt) }) : t("set.neverUsed")}</span>
+                        <span>
+                          {p.lastUsedAt
+                            ? t("set.lastUsed", { at: relativeTime(p.lastUsedAt) })
+                            : t("set.neverUsed")}
+                        </span>
                         {p.transports?.length ? <span>{p.transports.join(", ")}</span> : null}
                       </div>
                     </div>
@@ -167,7 +183,9 @@ function PasskeysCard() {
             <div className="banner">{t("set.passNone")}</div>
           )}
 
-          {status && <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>}
+          {status && (
+            <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>
+          )}
 
           <div className="row wrap" style={{ marginTop: 12 }}>
             <button className="primary" disabled={busy || !supported} onClick={add}>
@@ -206,7 +224,7 @@ function SemanticCard() {
     setBusy(true);
     setStatus(null);
     try {
-      const r = await api.semanticSet(on);
+      const r = await (on ? api.semanticSet(on) : withStepUp(() => api.semanticSet(on)));
       setStatus({ tone: "ok", text: on ? t("set.semOnNew") : t("set.semOff", { n: r.purged }) });
       reload();
     } catch (e) {
@@ -256,13 +274,16 @@ function SemanticCard() {
           <tr>
             <td className="muted">{t("set.semModel")}</td>
             <td className="addr">
-              {data?.model ?? t("common.dash")} · {t("set.semDims", { n: data?.dimensions ?? t("common.dash") })}
+              {data?.model ?? t("common.dash")} ·{" "}
+              {t("set.semDims", { n: data?.dimensions ?? t("common.dash") })}
             </td>
           </tr>
         </tbody>
       </table>
 
-      {status && <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>}
+      {status && (
+        <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>
+      )}
 
       <div className="row wrap" style={{ marginTop: 12 }}>
         {data?.enabled ? (
@@ -313,7 +334,10 @@ export function Settings() {
       setStatus({ tone: result.ok ? "ok" : "error", text: result.message });
       await refresh();
     } catch (e) {
-      setStatus({ tone: "error", text: e instanceof ApiClientError ? e.message : t("set.requestFailed") });
+      setStatus({
+        tone: "error",
+        text: e instanceof ApiClientError ? e.message : t("set.requestFailed"),
+      });
     } finally {
       setBusy(false);
     }
@@ -348,7 +372,9 @@ export function Settings() {
                 {subscribed
                   ? t("set.subscribed")
                   : t("set.notSubscribed") +
-                    (state && state.permission !== "default" ? ` · ${t("set.permission", { p: state.permission })}` : "")}
+                    (state && state.permission !== "default"
+                      ? ` · ${t("set.permission", { p: state.permission })}`
+                      : "")}
               </td>
             </tr>
             <tr>
@@ -358,11 +384,17 @@ export function Settings() {
           </tbody>
         </table>
 
-        {status && <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>}
+        {status && (
+          <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>
+        )}
 
         <div className="row wrap" style={{ marginTop: 12 }}>
           {!subscribed && (
-            <button className="primary" disabled={busy || !configured} onClick={() => run(enablePush)}>
+            <button
+              className="primary"
+              disabled={busy || !configured}
+              onClick={() => run(enablePush)}
+            >
               {t("set.turnOn")}
             </button>
           )}
@@ -382,7 +414,9 @@ export function Settings() {
                     ok: r.sent > 0,
                     message: r.sent
                       ? t("set.testSent", { n: r.sent })
-                      : t("set.testNone", { skip: r.skipped ? t("set.testSkip", { n: r.skipped }) : "" }),
+                      : t("set.testNone", {
+                          skip: r.skipped ? t("set.testSkip", { n: r.skipped }) : "",
+                        }),
                   };
                 })
               }

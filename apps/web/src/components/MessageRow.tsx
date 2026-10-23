@@ -78,7 +78,9 @@ export function MsgItem({
   // Inside one mailbox every row arrived at the same place, so the alias is only said where
   // it tells two rows apart.
   const arrival = sent ? null : arrivalLabel(m, scoped);
-  const spoofed = !sent && m.authVerdict === AuthVerdict.Spoofed;
+  // Fail closed, the way main hardened it: anything not provably from the claimed sender —
+  // spoofed *or merely unverified* — gets the warning, and its content stays out of the list.
+  const unverified = !sent && m.authVerdict !== AuthVerdict.Trusted;
   return (
     <li
       className={`msg ${m.isRead ? "" : "unread"} ${fresh ? "is-live" : ""} ${active ? "is-active" : ""} ${sent ? "is-sent" : ""} ${selected ? "is-selected" : ""} ${onSelect ? "is-selectable" : ""}`}
@@ -144,13 +146,13 @@ export function MsgItem({
                 {m.threadCount}
               </span>
             ) : null}
-            {spoofed ? (
-              // Never echo a forger's payload in the list — but say plainly that the row is not
-              // what it claims. Colour alone would not carry it.
+            {unverified ? (
+              // Never echo an unverified sender's payload in the list — but say plainly that
+              // the row is not what it claims. Colour alone would not carry it.
               <span className="msg-warn">{t("inbox.unverified")}</span>
             ) : null}
             <span className="msg-subject">{m.subject || t("inbox.noSubject")}</span>
-            {m.preview ? <span className="msg-preview">{m.preview}</span> : null}
+            {m.preview && (sent || m.authVerdict === AuthVerdict.Trusted) ? <span className="msg-preview">{m.preview}</span> : null}
             {/* Where it arrived, after the words rather than before them: the subject is what a
                 row is scanned for, and this is the fact that tells two rows in one list apart —
                 the alias inside a mailbox, the mailbox across all of them. It takes its width
@@ -172,13 +174,13 @@ export function MsgItem({
             ) : null}
             {arrival && !m.preview ? <span className="msg-alias">{arrival}</span> : null}
           </Link>
-          {/* Getting the code is this app's main job; opening the message to reach it is a round
-              trip the row can skip. A forged code stays hidden, as in the detail. */}
-          {!spoofed && !sent && m.primaryCode ? <CodeChip code={m.primaryCode} /> : null}
+          {/* Getting the code is this app's main job; opening the message to reach it is a
+              round trip the row can skip. Only an authenticated sender's code is shown,
+              exactly as main hardened it — unverified is not good enough here. */}
+          {m.authVerdict === AuthVerdict.Trusted && !sent && m.primaryCode ? <CodeChip code={m.primaryCode} /> : null}
         </span>
         <span className="msg-time">{relativeTime(m.receivedAt)}</span>
       </div>
     </li>
   );
 }
-

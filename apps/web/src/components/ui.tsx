@@ -4,6 +4,33 @@ import { MailStatus } from "@mailvault/shared";
 import { t } from "../lib/i18n";
 import { ArtMailbox, ArtSearch, ArtAlias, ArtDomain } from "./Icons";
 
+/** Stable tint choices for `Monogram`, so one sender always wears one colour. */
+const TINTS = [12, 20, 28, 36];
+
+/** A sender's initials on a tinted disc — identity at a glance without any address shown. */
+export function Monogram({ name, large }: { name: string; large?: boolean }) {
+  const clean = name.trim().replace(/^"+|"+$/g, "");
+  const words = clean.split(/[\s._@-]+/).filter(Boolean);
+  const initials = ((words[0]?.[0] ?? "?") + (words[1]?.[0] ?? "")).toUpperCase();
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) hash = (hash * 31 + clean.charCodeAt(i)) >>> 0;
+  const tint = TINTS[hash % TINTS.length] as number;
+  return (
+    <span
+      className={`mono-avatar ${large ? "mono-avatar--lg" : ""}`}
+      aria-hidden="true"
+      style={
+        {
+          "--av-bg": `color-mix(in oklab, var(--accent) ${tint}%, var(--surface-2))`,
+          "--av-line": `color-mix(in oklab, var(--accent) ${tint + 14}%, var(--border))`,
+        } as React.CSSProperties
+      }
+    >
+      {initials}
+    </span>
+  );
+}
+
 export function Loading({ label }: { label?: string }) {
   return (
     <div className="loading">

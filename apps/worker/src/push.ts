@@ -33,7 +33,27 @@ const MAX_FAILURES = 5;
 export function isUsableEndpoint(url: string): boolean {
   if (!url || url.length > 2048) return false;
   try {
-    return new URL(url).protocol === "https:";
+    const endpoint = new URL(url);
+    const hostname = endpoint.hostname.toLowerCase();
+    const authority = endpoint.href.slice("https://".length).split(/[/?#]/, 1)[0] ?? "";
+    if (
+      endpoint.protocol !== "https:" ||
+      endpoint.port !== "" ||
+      endpoint.username !== "" ||
+      endpoint.password !== "" ||
+      authority.includes("@") ||
+      hostname.endsWith(".") ||
+      hostname.startsWith("[") ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)
+    )
+      return false;
+
+    return (
+      hostname === "fcm.googleapis.com" ||
+      hostname === "updates.push.services.mozilla.com" ||
+      hostname.endsWith(".notify.windows.com") ||
+      hostname.endsWith(".push.apple.com")
+    );
   } catch {
     return false;
   }
@@ -86,10 +106,13 @@ const assertionCache = new Map<string, { at: number; value: string }>();
 type PushResult = "ok" | "gone" | "failed";
 
 async function pushOne(target: PushTarget, cfg: { jwk: JsonWebKey; subject: string; publicKey: string }, fetchImpl: typeof fetch): Promise<PushResult> {
+  // Recheck persisted rows too; old or manually inserted endpoints are not trusted.
+  if (!isUsableEndpoint(target.endpoint)) return "failed";
   let res: Response;
   try {
     res = await fetchImpl(target.endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         TTL: "3600",
         // Deliberately no `Urgency` header, i.e. RFC 8030's `normal`. Sending `low` told

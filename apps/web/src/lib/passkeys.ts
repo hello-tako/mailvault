@@ -43,13 +43,16 @@ export async function withStepUp<T>(run: () => Promise<T>): Promise<T> {
 }
 
 export async function registerPasskey(deviceLabel?: string): Promise<void> {
-  const { options, challenge } = await api.passkeyOptions();
-  const response = await startRegistration({ optionsJSON: options as never });
-  await api.passkeyVerify({ response, challenge, deviceLabel });
+  await withStepUp(async () => {
+    const { options, challenge } = await api.passkeyOptions();
+    const response = await startRegistration({ optionsJSON: options as never });
+    await api.passkeyVerify({ response, challenge, deviceLabel });
+  });
   // Enrolling a new key is not the same as proving you hold one.
   clearGrant();
 }
 
 export async function removePasskey(id: string): Promise<void> {
   await withStepUp(() => api.deletePasskey(id));
+  clearGrant();
 }

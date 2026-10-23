@@ -1,25 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { AuthVerdict } from "@mailvault/shared";
-import { AuthOutcome, assessAuth, bareDomain, domainsAlign, registrableDomain } from "../../src/mail/auth";
+import {
+  AuthOutcome,
+  assessAuth,
+  bareDomain,
+  domainsAlign,
+  registrableDomain,
+} from "../../src/mail/auth";
 
-const NETFLIX_AR = "mx.netflix.com; spf=pass (domain: netflix.com) smtp.mailfrom=returns.netflix.com; dkim=pass header.d=netflix.com; dmarc=pass (p=none dis=none) header.from=netflix.com";
+const NETFLIX_AR =
+  "mx.netflix.com; spf=pass (domain: netflix.com) smtp.mailfrom=returns.netflix.com; dkim=pass header.d=netflix.com; dmarc=pass (p=none dis=none) header.from=netflix.com";
 
 function assess(authResults: string[], headerFrom: string, envelopeFrom: string) {
   return assessAuth({ authResults, headerFrom, envelopeFrom });
 }
 
-describe("aligned passes only (section: hostile input)", () => {
-  it("trusts a DMARC pass aligned with the From domain", () => {
+describe("sender-auth evidence provenance", () => {
+  it("records an aligned pass from the message but does not trust its provenance", () => {
     const a = assess([NETFLIX_AR], "Netflix <no-reply@netflix.com>", "bounce@returns.netflix.com");
-    expect(a.verdict).toBe(AuthVerdict.Trusted);
+    expect(a.verdict).toBe(AuthVerdict.Unverified);
     expect(a.dmarc).toBe(AuthOutcome.Pass);
     expect(a.dkim).toBe(AuthOutcome.Pass);
+    expect(a.alignedPass.dmarc).toBe(false);
     expect(a.envelopeMismatch).toBe(false);
   });
 
   it("does NOT trust a self-authored Authentication-Results header", () => {
-    // The attacker controls the message, so "pass" only counts when the vouched-for
-    // domain aligns with From. Here it does not.
+    // Alignment does not make a sender-authored result trustworthy.
     const a = assess(
       ["evil.example; spf=pass smtp.mailfrom=evil.example; dkim=pass header.d=evil.example"],
       "Netflix <security@genuine-netflix-verify.com>",
@@ -27,20 +34,23 @@ describe("aligned passes only (section: hostile input)", () => {
     );
     expect(a.verdict).not.toBe(AuthVerdict.Trusted);
     expect(a.dkim).toBe(AuthOutcome.Pass); // reported as observed...
-    expect(a.alignedPass.dkim).toBe(false); // ...but it vouches for evil.example, not for From
+    expect(a.evidence[0]?.aligned).toBe(false);
+    expect(a.alignedPass.dkim).toBe(false);
   });
 
-  it("treats dmarc=fail as spoofing even when a DKIM pass is present but misaligned", () => {
+  it("does not treat an untrusted dmarc=fail as authoritative spoofing", () => {
     const a = assess(
-      ["mailer.x; dkim=pass header.d=other.org; dmarc=fail (p=reject dis=none) header.from=netflix.com"],
+      [
+        "mailer.x; dkim=pass header.d=other.org; dmarc=fail (p=reject dis=none) header.from=netflix.com",
+      ],
       "Netflix <security@netflix.com>",
       "bounce@mailer.x",
     );
-    expect(a.verdict).toBe(AuthVerdict.Spoofed);
+    expect(a.verdict).toBe(AuthVerdict.Unverified);
     expect(a.dmarc).toBe(AuthOutcome.Fail);
   });
 
-  it("keeps a forwarded message trusted: aligned dkim pass despite a third-party spf fail", () => {
+  it("does not trust raw forwarded results even when DKIM is aligned", () => {
     const a = assess(
       [
         "forwarder.example; spf=fail smtp.mailfrom=netflix.com",
@@ -49,7 +59,7 @@ describe("aligned passes only (section: hostile input)", () => {
       "Netflix <no-reply@netflix.com>",
       "me@forwarder.example",
     );
-    expect(a.verdict).toBe(AuthVerdict.Trusted);
+    expect(a.verdict).toBe(AuthVerdict.Unverified);
     expect(a.spf).toBe(AuthOutcome.Fail); // reported honestly, but not the trust signal
     expect(a.envelopeMismatch).toBe(true);
   });
@@ -61,7 +71,11 @@ describe("aligned passes only (section: hostile input)", () => {
   });
 
   it("survives malformed header values", () => {
-    const a = assess([";;; totally not rfc 8601 ;;;", "mx; spf=weird smtp.mailfrom="], "x@example.com", "y@example.com");
+    const a = assess(
+      [";;; totally not rfc 8601 ;;;", "mx; spf=weird smtp.mailfrom="],
+      "x@example.com",
+      "y@example.com",
+    );
     expect(a.evidence.length).toBeLessThanOrEqual(1);
     expect(a.verdict).toBe(AuthVerdict.Unverified);
   });
@@ -78,12 +92,15 @@ describe("domain comparison", () => {
 
   it("keeps multi-part public suffixes intact", () => {
     expect(registrableDomain("mail.antexvn.com.vn")).toBe("antexvn.com.vn");
+    expect(registrableDomain("mail.example.co.jp")).toBe("example.co.jp");
     expect(registrableDomain("www.abitovn.com")).toBe("abitovn.com");
-    expect(registrableDomain("localhost")).toBe("localhost");
+    expect(registrableDomain("localhost")).toBeNull();
   });
 
   it("reads a domain out of display names and angle brackets", () => {
-    expect(bareDomain('"Netflix" <no-reply@netflix.com>')).toBe("no-reply@netflix.com".split("@")[1]);
+    expect(bareDomain('"Netflix" <no-reply@netflix.com>')).toBe(
+      "no-reply@netflix.com".split("@")[1],
+    );
     expect(bareDomain("  ")).toBeNull();
     expect(bareDomain(null)).toBeNull();
   });

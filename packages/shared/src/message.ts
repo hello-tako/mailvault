@@ -47,12 +47,21 @@ export const AttachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof AttachmentSchema>;
 
-/** One `Authentication-Results` entry as it reached us, with our alignment judgement. */
+/** Where an evidence item came from. Only `cryptographic-verifier` is receiver-verified. */
+export const AuthEvidenceSourceSchema = z.enum([
+  "message-header",
+  "cryptographic-verifier",
+  "trusted-runtime-metadata",
+]);
+
+/** One authentication result with our alignment judgement. */
 export const AuthEvidenceSchema = z.object({
   mechanism: z.enum(["spf", "dkim", "dmarc"]),
   outcome: z.string(),
   domain: z.string().nullable(),
   aligned: z.boolean(),
+  /** Rows stored before provenance existed carry none: they are the sender's own header claim. */
+  source: AuthEvidenceSourceSchema.default("message-header"),
   reporter: z.string().nullable(),
 });
 export type AuthEvidence = z.infer<typeof AuthEvidenceSchema>;
@@ -102,6 +111,7 @@ export const MessageSummarySchema = z.object({
   subject: z.string().nullable(),
   preview: z.string().nullable(),
   receivedAt: z.string(),
+  headerDate: z.string().nullable().optional(),
   isRead: z.boolean(),
   /** The owner's own mark. No rule, filter or provider ever sets it. */
   starred: z.boolean().default(false),

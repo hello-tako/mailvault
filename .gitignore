@@ -1,4 +1,5 @@
 node_modules/
+.hoplite/
 dist/
 build/
 .wrangler/
@@ -22,6 +23,8 @@ apps/web/dist/
 
 # Playwright visual snapshots (local inspection only)
 apps/web/e2e-screens/
+apps/web/test-results/
+apps/web/playwright-report/
 
 # Operational snapshots taken before DNS changes (local restore data, not source)
 .ops/

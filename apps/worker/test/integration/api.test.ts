@@ -4,6 +4,7 @@ import type { Env } from "../../src/env";
 import worker from "../../src/index";
 import { ingestEmail } from "../../src/mail/ingest";
 import { newGrant } from "../../src/db/security";
+import { drainDeletionJobs } from "../../src/db/deletions";
 import { getTestBindings, type TestBindings } from "./_mf";
 
 let bindings: TestBindings;
@@ -11,7 +12,10 @@ let TEST_ENV: Env;
 let DB: D1Database;
 let BUCKET: R2Bucket;
 
-const CTX = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+const CTX = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 const j = async (r: Response): Promise<any> => r.json();
 
 beforeAll(async () => {
@@ -26,7 +30,10 @@ afterAll(async () => {
 });
 
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://localhost${path}`, { ...init, headers: { origin: "http://localhost", ...(init.headers ?? {}) } });
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers: { origin: "http://localhost", ...(init.headers ?? {}) },
+  });
 }
 const mutationHeaders = { "x-mailvault": "1", "content-type": "application/json" };
 
@@ -47,7 +54,15 @@ async function seedMessage(domainId: string, dedupe: string, at: string, isRead:
     `INSERT INTO messages (id, domain_id, dedupe_key, envelope_to, subject, received_at, raw_r2_key, is_read, created_at)
      VALUES (?1, ?2, ?3, ?4, 'code', ?5, ?6, ?7, ?5)`,
   )
-    .bind(crypto.randomUUID(), domainId, dedupe, `x@${dedupe}.example`, at, `seed/raw/${dedupe}.eml`, isRead ? 1 : 0)
+    .bind(
+      crypto.randomUUID(),
+      domainId,
+      dedupe,
+      `x@${dedupe}.example`,
+      at,
+      `seed/raw/${dedupe}.eml`,
+      isRead ? 1 : 0,
+    )
     .run();
 }
 
@@ -116,14 +131,22 @@ describe("HTTP API", () => {
   it("requires a signed-in identity before the live route answers", async () => {
     // The auth gate runs before the handler, so this is the same 401 every /api/* route
     // gives — the socket cannot become an unauthenticated channel.
-    const res = await worker.fetch(new Request("http://localhost/api/live", { headers: { origin: "http://localhost" } }), { ...TEST_ENV, DEV_AUTH_BYPASS: "false", ENVIRONMENT: "production" } as unknown as Env, CTX);
+    const res = await worker.fetch(
+      new Request("http://localhost/api/live", { headers: { origin: "http://localhost" } }),
+      { ...TEST_ENV, DEV_AUTH_BYPASS: "false", ENVIRONMENT: "production" } as unknown as Env,
+      CTX,
+    );
     expect(res.status).toBe(401);
   });
 
   it("rejects a mutation lacking the CSRF header", async () => {
     const domainId = await seedDomain();
     const res = await worker.fetch(
-      req("/api/aliases", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ domainId, mode: "custom", localPart: "no-csrf" }) }),
+      req("/api/aliases", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ domainId, mode: "custom", localPart: "no-csrf" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -134,7 +157,11 @@ describe("HTTP API", () => {
   it("creates, lists, disables and deletes an alias", async () => {
     const domainId = await seedDomain();
     const created = await worker.fetch(
-      req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "shop01", label: "Shopping" }) }),
+      req("/api/aliases", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ domainId, mode: "custom", localPart: "shop01", label: "Shopping" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -145,25 +172,49 @@ describe("HTTP API", () => {
     const list = await j(await worker.fetch(req("/api/aliases"), TEST_ENV, CTX));
     expect(list.items.some((a: { id: string }) => a.id === alias.id)).toBe(true);
 
-    const disabled = await worker.fetch(req(`/api/aliases/${alias.id}/disable`, { method: "POST", headers: mutationHeaders }), TEST_ENV, CTX);
+    const disabled = await worker.fetch(
+      req(`/api/aliases/${alias.id}/disable`, { method: "POST", headers: mutationHeaders }),
+      TEST_ENV,
+      CTX,
+    );
     expect((await j(disabled)).status).toBe("DISABLED");
 
-    const del = await worker.fetch(req(`/api/aliases/${alias.id}`, { method: "DELETE", headers: mutationHeaders, body: JSON.stringify({ purgeMessages: false }) }), TEST_ENV, CTX);
+    const del = await worker.fetch(
+      req(`/api/aliases/${alias.id}`, {
+        method: "DELETE",
+        headers: mutationHeaders,
+        body: JSON.stringify({ purgeMessages: false }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect((await j(del)).deleted).toBe(true);
   });
 
   it("rejects a duplicate custom alias with 409", async () => {
     const domainId = await seedDomain();
     const body = JSON.stringify({ domainId, mode: "custom", localPart: "taken" });
-    await worker.fetch(req("/api/aliases", { method: "POST", headers: mutationHeaders, body }), TEST_ENV, CTX);
-    const dup = await worker.fetch(req("/api/aliases", { method: "POST", headers: mutationHeaders, body }), TEST_ENV, CTX);
+    await worker.fetch(
+      req("/api/aliases", { method: "POST", headers: mutationHeaders, body }),
+      TEST_ENV,
+      CTX,
+    );
+    const dup = await worker.fetch(
+      req("/api/aliases", { method: "POST", headers: mutationHeaders, body }),
+      TEST_ENV,
+      CTX,
+    );
     expect(dup.status).toBe(409);
   });
 
   it("stores a custom name lowercased, so inbound mail can actually match it", async () => {
     const domainId = await seedDomain();
     const created = await worker.fetch(
-      req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "  Shop01  " }) }),
+      req("/api/aliases", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ domainId, mode: "custom", localPart: "  Shop01  " }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -174,7 +225,11 @@ describe("HTTP API", () => {
 
     // Case is not a second mailbox: the same name in another casing must collide.
     const clash = await worker.fetch(
-      req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "SHOP01" }) }),
+      req("/api/aliases", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ domainId, mode: "custom", localPart: "SHOP01" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -184,7 +239,11 @@ describe("HTTP API", () => {
   it("answers a rejected custom name with the rule it broke, per field", async () => {
     const domainId = await seedDomain();
     const res = await worker.fetch(
-      req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "postmaster" }) }),
+      req("/api/aliases", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ domainId, mode: "custom", localPart: "postmaster" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -202,7 +261,10 @@ describe("HTTP API", () => {
       .bind(crypto.randomUUID(), domainId)
       .run();
 
-    const { message } = await makeMessage("verify@notify.example", htmlEmailWithAttachment("verify@notify.example", "api-m1"));
+    const { message } = await makeMessage(
+      "verify@notify.example",
+      htmlEmailWithAttachment("verify@notify.example", "api-m1"),
+    );
     const stored = await ingestEmail(message, bindings.env, DB, BUCKET);
     expect(stored.status).toBe("stored");
     const messageId = (stored as { messageId: string }).messageId;
@@ -220,24 +282,56 @@ describe("HTTP API", () => {
     expect(dl.headers.get("Content-Disposition")).toContain("attachment");
     expect(dl.headers.get("Content-Disposition")).toContain("doc.pdf");
 
-    const read = await worker.fetch(req(`/api/messages/${messageId}/read`, { method: "PATCH", headers: mutationHeaders, body: JSON.stringify({ isRead: true }) }), TEST_ENV, CTX);
+    const read = await worker.fetch(
+      req(`/api/messages/${messageId}/read`, {
+        method: "PATCH",
+        headers: mutationHeaders,
+        body: JSON.stringify({ isRead: true }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect((await j(read)).isRead).toBe(true);
 
-    const del = await worker.fetch(req(`/api/messages/${messageId}`, { method: "DELETE", headers: mutationHeaders }), TEST_ENV, CTX);
-    expect((await j(del)).deleted).toBe(true);
-    expect(await DB.prepare(`SELECT 1 FROM messages WHERE id=?1`).bind(messageId).first()).toBeNull();
+    const grant = await newGrant(DB, 60_000);
+    const del = await worker.fetch(
+      req(`/api/messages/${messageId}`, {
+        method: "DELETE",
+        headers: { ...mutationHeaders, "x-mailvault-stepup": grant.token },
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(del.status).toBe(202);
+    expect(await j(del)).toMatchObject({ deleted: false, state: "PENDING" });
+    await drainDeletionJobs(TEST_ENV);
+    expect(
+      await DB.prepare(`SELECT 1 FROM messages WHERE id=?1`).bind(messageId).first(),
+    ).toBeNull();
   });
 });
 
 describe("alias lifecycle: notes, pin, archive and timeline", () => {
   const patch = (id: string, body: unknown) =>
-    worker.fetch(req(`/api/aliases/${id}`, { method: "PATCH", headers: mutationHeaders, body: JSON.stringify(body) }), TEST_ENV, CTX);
+    worker.fetch(
+      req(`/api/aliases/${id}`, {
+        method: "PATCH",
+        headers: mutationHeaders,
+        body: JSON.stringify(body),
+      }),
+      TEST_ENV,
+      CTX,
+    );
 
   it("changes one field without clobbering the others, and archives out of the default view", async () => {
     const domainId = await seedDomain();
     const created = await j(
       await worker.fetch(
-        req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "life01", label: "Life" }) }),
+        req("/api/aliases", {
+          method: "POST",
+          headers: mutationHeaders,
+          body: JSON.stringify({ domainId, mode: "custom", localPart: "life01", label: "Life" }),
+        }),
         TEST_ENV,
         CTX,
       ),
@@ -264,7 +358,11 @@ describe("alias lifecycle: notes, pin, archive and timeline", () => {
     const domainId = await seedDomain();
     const created = await j(
       await worker.fetch(
-        req("/api/aliases", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ domainId, mode: "custom", localPart: "life02" }) }),
+        req("/api/aliases", {
+          method: "POST",
+          headers: mutationHeaders,
+          body: JSON.stringify({ domainId, mode: "custom", localPart: "life02" }),
+        }),
         TEST_ENV,
         CTX,
       ),
@@ -282,7 +380,12 @@ describe("alias lifecycle: notes, pin, archive and timeline", () => {
       .bind(aliasId, domainId)
       .run();
     const stored = await ingestEmail(
-      (await makeMessage("tally@notify.example", htmlEmailWithAttachment("tally@notify.example", "tally-m1"))).message,
+      (
+        await makeMessage(
+          "tally@notify.example",
+          htmlEmailWithAttachment("tally@notify.example", "tally-m1"),
+        )
+      ).message,
       bindings.env,
       DB,
       BUCKET,
@@ -316,8 +419,13 @@ describe("dashboard mailboxes", () => {
     // is a different fact from the domain not existing.
     expect(named("idle.example")).toMatchObject({ total: 0, unread: 0, lastReceivedAt: null });
     // Busiest first, because the dashboard leads with where the mail actually is.
-    expect(dash.mailboxes.slice(0, 2).map((m: { name: string }) => m.name)).toEqual(["busy.example", "quiet.example"]);
-    expect(dash.totalMessages).toBe(dash.mailboxes.reduce((n: number, m: { total: number }) => n + m.total, 0));
+    expect(dash.mailboxes.slice(0, 2).map((m: { name: string }) => m.name)).toEqual([
+      "busy.example",
+      "quiet.example",
+    ]);
+    expect(dash.totalMessages).toBe(
+      dash.mailboxes.reduce((n: number, m: { total: number }) => n + m.total, 0),
+    );
   });
 });
 
@@ -350,17 +458,27 @@ describe("passkey step-up gate", () => {
     const id = await aliasId(domainId, "gate1");
 
     const blocked = await worker.fetch(
-      req(`/api/aliases/${id}`, { method: "DELETE", headers: mutationHeaders, body: JSON.stringify({ purgeMessages: true }) }),
+      req(`/api/aliases/${id}`, {
+        method: "DELETE",
+        headers: mutationHeaders,
+        body: JSON.stringify({ purgeMessages: true }),
+      }),
       TEST_ENV,
       CTX,
     );
     expect(blocked.status).toBe(403);
     expect((await j(blocked)).error.details).toEqual({ stepUpRequired: true });
     // The refusal must not have taken the alias with it.
-    expect((await j(await worker.fetch(req(`/api/aliases/${id}`), TEST_ENV, CTX))).alias).toBeTruthy();
+    expect(
+      (await j(await worker.fetch(req(`/api/aliases/${id}`), TEST_ENV, CTX))).alias,
+    ).toBeTruthy();
 
     const allowed = await worker.fetch(
-      req(`/api/aliases/${id}`, { method: "DELETE", headers: mutationHeaders, body: JSON.stringify({ purgeMessages: false }) }),
+      req(`/api/aliases/${id}`, {
+        method: "DELETE",
+        headers: mutationHeaders,
+        body: JSON.stringify({ purgeMessages: false }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -382,11 +500,14 @@ describe("passkey step-up gate", () => {
       TEST_ENV,
       CTX,
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     expect((await j(res)).purgedMessages).toBe(true);
+    await drainDeletionJobs(TEST_ENV);
 
     // A read of the table must not hand out someone else's second factor.
-    const stored = await DB.prepare(`SELECT token_hash FROM step_up_grants LIMIT 5`).all<{ token_hash: string }>();
+    const stored = await DB.prepare(`SELECT token_hash FROM step_up_grants LIMIT 5`).all<{
+      token_hash: string;
+    }>();
     for (const row of stored.results ?? []) {
       expect(row.token_hash).not.toBe(grant.token);
       expect(row.token_hash).toHaveLength(64);
@@ -414,7 +535,9 @@ describe("passkey step-up gate", () => {
 
   it("gates detaching a domain and turning sender checks off, but not tightening them", async () => {
     const domainId = await seedDomain();
-    const zone = (await DB.prepare(`SELECT cloudflare_zone_id AS z FROM domains WHERE id = ?1`).bind(domainId).first<{ z: string }>())!.z;
+    const zone = (await DB.prepare(`SELECT cloudflare_zone_id AS z FROM domains WHERE id = ?1`)
+      .bind(domainId)
+      .first<{ z: string }>())!.z;
 
     const removed = await worker.fetch(
       req(`/api/domains/${zone}`, { method: "DELETE", headers: mutationHeaders }),
@@ -424,14 +547,22 @@ describe("passkey step-up gate", () => {
     expect(removed.status).toBe(403);
 
     const off = await worker.fetch(
-      req(`/api/domains/${zone}/auth-policy`, { method: "PATCH", headers: mutationHeaders, body: JSON.stringify({ policy: "OFF" }) }),
+      req(`/api/domains/${zone}/auth-policy`, {
+        method: "PATCH",
+        headers: mutationHeaders,
+        body: JSON.stringify({ policy: "OFF" }),
+      }),
       TEST_ENV,
       CTX,
     );
     expect(off.status).toBe(403);
 
     const reject = await worker.fetch(
-      req(`/api/domains/${zone}/auth-policy`, { method: "PATCH", headers: mutationHeaders, body: JSON.stringify({ policy: "REJECT" }) }),
+      req(`/api/domains/${zone}/auth-policy`, {
+        method: "PATCH",
+        headers: mutationHeaders,
+        body: JSON.stringify({ policy: "REJECT" }),
+      }),
       TEST_ENV,
       CTX,
     );
@@ -446,16 +577,47 @@ describe("passkey step-up gate", () => {
   });
 
   it("burns a challenge on first use, so a prompt cannot be replayed", async () => {
-    const first = await j(await worker.fetch(req("/api/security/passkeys/options", { method: "POST", headers: mutationHeaders }), TEST_ENV, CTX));
+    const first = await j(
+      await worker.fetch(
+        req("/api/security/passkeys/options", { method: "POST", headers: mutationHeaders }),
+        TEST_ENV,
+        CTX,
+      ),
+    );
     expect(typeof first.challenge).toBe("string");
     expect(first.options.rp?.id ?? first.options.rpId).toBeTruthy();
 
-    const body = { response: { id: "c1", rawId: "c1", type: "public-key", clientExtensionResults: {}, response: {}, challenge: first.challenge } };
-    const used = await worker.fetch(req("/api/security/passkeys/verify", { method: "POST", headers: mutationHeaders, body: JSON.stringify(body) }), TEST_ENV, CTX);
+    const body = {
+      challenge: first.challenge,
+      response: {
+        id: "c1",
+        rawId: "c1",
+        type: "public-key",
+        clientExtensionResults: {},
+        response: {},
+      },
+    };
+    const used = await worker.fetch(
+      req("/api/security/passkeys/verify", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(body),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect(used.status).toBe(400);
 
     // Same challenge again: refused before verification is even attempted.
-    const replay = await worker.fetch(req("/api/security/passkeys/verify", { method: "POST", headers: mutationHeaders, body: JSON.stringify(body) }), TEST_ENV, CTX);
+    const replay = await worker.fetch(
+      req("/api/security/passkeys/verify", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(body),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect(replay.status).toBe(400);
     expect((await j(replay)).error.message).toMatch(/expired|already used/);
   });
@@ -465,37 +627,88 @@ describe("passkey step-up gate", () => {
     expect(JSON.stringify(status)).not.toMatch(/publicKey|public_key|credentialId/);
 
     // Nothing enrolled yet, so the first registration needs only the signed-in identity.
-    const ok = await worker.fetch(req("/api/security/passkeys/options", { method: "POST", headers: mutationHeaders }), TEST_ENV, CTX);
+    const ok = await worker.fetch(
+      req("/api/security/passkeys/options", { method: "POST", headers: mutationHeaders }),
+      TEST_ENV,
+      CTX,
+    );
     expect(ok.status).toBe(200);
   });
 });
 
 describe("push subscription API", () => {
-  const good = { endpoint: "https://push.example/s/secret-token", p256dh: "BFakeKeyForTests", auth: "fakeauth" };
+  const good = {
+    endpoint: "https://fcm.googleapis.com/fcm/send/secret-token",
+    p256dh: "BFakeKeyForTests",
+    auth: "fakeauth",
+  };
 
   it("refuses to subscribe when VAPID is not configured", async () => {
     const key = await j(await worker.fetch(req("/api/push/public-key"), TEST_ENV, CTX));
     expect(key.key).toBeNull();
-    const res = await worker.fetch(req("/api/push/subscribe", { method: "POST", headers: mutationHeaders, body: JSON.stringify(good) }), TEST_ENV, CTX);
+    const res = await worker.fetch(
+      req("/api/push/subscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(good),
+      }),
+      TEST_ENV,
+      CTX,
+    );
     expect(res.status).toBe(503);
     expect((await j(res)).error.code).toBe("PUSH_NOT_CONFIGURED");
   });
 
   it("validates the endpoint, upserts it, and never echoes the secret URL back", async () => {
-    const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])) as CryptoKeyPair;
+    const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+    ])) as CryptoKeyPair;
     const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-    const env = { ...TEST_ENV, VAPID_PRIVATE_KEY: JSON.stringify(jwk) } as unknown as typeof TEST_ENV;
+    const env = {
+      ...TEST_ENV,
+      VAPID_PRIVATE_KEY: JSON.stringify(jwk),
+    } as unknown as typeof TEST_ENV;
 
     const bad = await worker.fetch(
-      req("/api/push/subscribe", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ ...good, endpoint: "http://push.example/s/x" }) }),
+      req("/api/push/subscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ ...good, endpoint: "http://push.example/s/x" }),
+      }),
       env,
       CTX,
     );
     expect(bad.status).toBe(400);
+    const arbitraryHttps = await worker.fetch(
+      req("/api/push/subscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ ...good, endpoint: "https://push.example/s/x" }),
+      }),
+      env,
+      CTX,
+    );
+    expect(arbitraryHttps.status).toBe(400);
 
-    const created = await worker.fetch(req("/api/push/subscribe", { method: "POST", headers: mutationHeaders, body: JSON.stringify(good) }), env, CTX);
+    const created = await worker.fetch(
+      req("/api/push/subscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(good),
+      }),
+      env,
+      CTX,
+    );
     expect(created.status).toBe(201);
-    await worker.fetch(req("/api/push/subscribe", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ ...good, p256dh: "rotated" }) }), env, CTX);
+    await worker.fetch(
+      req("/api/push/subscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ ...good, p256dh: "rotated" }),
+      }),
+      env,
+      CTX,
+    );
 
     const status = await worker.fetch(req("/api/push/status"), env, CTX);
     const body = await status.text();
@@ -505,7 +718,15 @@ describe("push subscription API", () => {
     const pub = await j(await worker.fetch(req("/api/push/public-key"), env, CTX));
     expect(pub.key).toMatch(/^B/);
 
-    const off = await worker.fetch(req("/api/push/unsubscribe", { method: "POST", headers: mutationHeaders, body: JSON.stringify({ endpoint: good.endpoint }) }), env, CTX);
+    const off = await worker.fetch(
+      req("/api/push/unsubscribe", {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ endpoint: good.endpoint }),
+      }),
+      env,
+      CTX,
+    );
     expect((await j(off)).removed).toBe(1);
   });
 });

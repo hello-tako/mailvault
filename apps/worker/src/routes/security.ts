@@ -4,17 +4,17 @@ import { z } from "zod";
 import type { AppEnv } from "../app-env";
 import type { Env } from "../env";
 import { actorOf, readJson } from "./_helpers";
-import { badRequest, forbidden, notFound } from "../lib/errors";
+import { badRequest, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
 import {
   addPasskey,
   consumeChallenge,
   findPasskeyByCredential,
-  grantIsValid,
   listPasskeys,
   newChallenge,
   newGrant,
   removePasskey,
+  revokeGrants,
   toPublic,
   touchPasskey,
 } from "../db/security";
@@ -27,15 +27,20 @@ import {
   verifyAssertion,
   verifyRegistration,
 } from "../lib/webauthn";
+import { requireIrreversibleStepUp, STEP_UP_HEADER } from "../security/irreversible";
 
-export const STEP_UP_HEADER = "x-mailvault-stepup";
+export { STEP_UP_HEADER } from "../security/irreversible";
 
 const CredentialResponse = z.object({
   response: z.record(z.unknown()),
+  challenge: z.string().min(1),
   deviceLabel: z.string().max(120).optional(),
 });
 
-const AssertionResponse = z.object({ response: z.record(z.unknown()) });
+const AssertionResponse = z.object({
+  response: z.record(z.unknown()),
+  challenge: z.string().min(1),
+});
 
 /**
  * Refuse unless this request carries a live step-up grant.
@@ -44,11 +49,11 @@ const AssertionResponse = z.object({ response: z.record(z.unknown()) });
  * the request is actually destructive — an alias delete that keeps its mail does not need
  * a second factor, and pretending otherwise would train the owner to route around it.
  */
-export async function requireStepUp(c: Context<AppEnv>): Promise<void> {
-  const token = c.req.header(STEP_UP_HEADER);
-  if (await grantIsValid(c.env.DB, token)) return;
-  log.warn("step_up_required", { path: c.req.path });
-  throw forbidden("Unlock with your passkey first", { stepUpRequired: true });
+export async function requireStepUp(
+  c: Context<AppEnv>,
+  operation: Parameters<typeof requireIrreversibleStepUp>[2] = "alias.purge",
+): Promise<void> {
+  return requireIrreversibleStepUp(c.env.DB, c.req.header(STEP_UP_HEADER), operation);
 }
 
 async function challengeFor(c: Context<AppEnv>, kind: "register" | "assert"): Promise<string> {
@@ -56,8 +61,13 @@ async function challengeFor(c: Context<AppEnv>, kind: "register" | "assert"): Pr
 }
 
 /** Consume the stored challenge before verifying, so a response can only be replayed once. */
-async function takeChallenge(c: Context<AppEnv>, kind: "register" | "assert", challenge: unknown): Promise<string> {
-  if (typeof challenge !== "string" || challenge.length === 0) throw badRequest("Missing challenge");
+async function takeChallenge(
+  c: Context<AppEnv>,
+  kind: "register" | "assert",
+  challenge: unknown,
+): Promise<string> {
+  if (typeof challenge !== "string" || challenge.length === 0)
+    throw badRequest("Missing challenge");
   if (!(await consumeChallenge(c.env.DB, challenge, kind))) {
     throw badRequest("That prompt expired or was already used. Start again.");
   }
@@ -83,19 +93,25 @@ export const securityRoute = new Hono<AppEnv>()
   .post("/api/security/passkeys/options", async (c) => {
     const rp = origin(c.env);
     const existing = await listPasskeys(c.env.DB);
-    // Once one passkey exists, adding another is itself a sensitive operation: otherwise a
-    // hijacked session could quietly enrol the attacker's key and the gate would be gone.
-    if (existing.length > 0) await requireStepUp(c);
+    // Once one passkey exists, adding another is itself a sensitive operation.
+    if (existing.length > 0) await requireStepUp(c, "passkey.enroll");
     const challenge = await challengeFor(c, "register");
     const options = await registrationOptions(rp, actorOf(c).email, existing);
-    log.info("passkey_registration_started", { actor: actorOf(c).email, replacing: existing.length });
+    options.challenge = challenge;
+    log.info("passkey_registration_started", {
+      actor: actorOf(c).email,
+      replacing: existing.length,
+    });
     return c.json({ options, challenge });
   })
 
   .post("/api/security/passkeys/verify", async (c) => {
     const rp = origin(c.env);
+    // Re-check on completion: an options request made with no keys must not become an
+    // enrollment bypass if a key is added before verification completes.
+    if ((await listPasskeys(c.env.DB)).length > 0) await requireStepUp(c, "passkey.enroll");
     const body = await readJson(c, CredentialResponse);
-    const expected = await takeChallenge(c, "register", (body.response as { challenge?: unknown }).challenge);
+    const expected = await takeChallenge(c, "register", body.challenge);
     const verified = await verifyRegistration(rp, body.response as never, expected);
     if (!verified.ok) throw badRequest(verified.reason);
 
@@ -118,11 +134,14 @@ export const securityRoute = new Hono<AppEnv>()
     const existing = await listPasskeys(c.env.DB);
     const target = existing.find((p) => p.id === c.req.param("id"));
     if (!target) throw notFound("Passkey not found");
-    // Removing the last one is the break-glass path: without it a lost key means a locked
-    // owner. It is also the only way back to no second factor at all, so it is stated here.
-    if (existing.length > 1) await requireStepUp(c);
+    await requireStepUp(c, "passkey.remove");
     await removePasskey(c.env.DB, target.id);
-    log.info("passkey_removed", { actor: actorOf(c).email, passkeyId: target.id, remaining: existing.length - 1 });
+    await revokeGrants(c.env.DB);
+    log.info("passkey_removed", {
+      actor: actorOf(c).email,
+      passkeyId: target.id,
+      remaining: existing.length - 1,
+    });
     return c.json({ removed: true, remaining: existing.length - 1 });
   })
 
@@ -132,14 +151,19 @@ export const securityRoute = new Hono<AppEnv>()
     if (keys.length === 0) throw badRequest("Register a passkey first.");
     const challenge = await challengeFor(c, "assert");
     const options = await assertionOptions(rp, keys);
+    options.challenge = challenge;
     return c.json({ options, challenge });
   })
 
   .post("/api/security/step-up/verify", async (c) => {
     const rp = origin(c.env);
     const body = await readJson(c, AssertionResponse);
-    const raw = body.response as { id?: unknown; clientExtensionResults?: Record<string, unknown>; response: Record<string, unknown> };
-    const expected = await takeChallenge(c, "assert", raw.response?.challenge);
+    const raw = body.response as {
+      id?: unknown;
+      clientExtensionResults?: Record<string, unknown>;
+      response: Record<string, unknown>;
+    };
+    const expected = await takeChallenge(c, "assert", body.challenge);
     if (typeof raw.id !== "string") throw badRequest("Missing credential id");
 
     const passkey = await findPasskeyByCredential(c.env.DB, raw.id);
@@ -152,5 +176,9 @@ export const securityRoute = new Hono<AppEnv>()
     const grant = await newGrant(c.env.DB, GRANT_TTL_MS);
     log.info("step_up_granted", { actor: actorOf(c).email, passkeyId: passkey.id });
     // Shown once, and only its hash is stored.
-    return c.json({ token: grant.token, expiresAt: grant.expiresAt, seconds: Math.floor(GRANT_TTL_MS / 1000) });
+    return c.json({
+      token: grant.token,
+      expiresAt: grant.expiresAt,
+      seconds: Math.floor(GRANT_TTL_MS / 1000),
+    });
   });

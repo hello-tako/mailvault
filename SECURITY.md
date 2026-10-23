@@ -1,7 +1,7 @@
 # MailVault Security Model
 
 This document maps the security requirements for a private, internet-facing
-receive-only mail system onto the actual implementation, and states the threat model.
+mail storage and sending system onto the actual implementation, and states the threat model.
 Email is treated as **hostile input at every layer**.
 
 Scope: personal/self-hosted use by a single owner behind Cloudflare Access. Not
@@ -26,7 +26,7 @@ untrusted; the Cloudflare API token is the single most sensitive secret.
 
 ## 2. Secrets & the Cloudflare API token
 
-**Rule:** the runtime token exists *only* as a Worker secret.
+**Rule:** the runtime token exists _only_ as a Worker secret.
 
 - Typed as a secret binding in `apps/worker/src/env.ts`
   (`CLOUDFLARE_API_TOKEN?: string`). Set with `wrangler secret put` (prod) or
@@ -35,7 +35,7 @@ untrusted; the Cloudflare API token is the single most sensitive secret.
   `apps/worker/src/routes/_helpers.ts` → `cfClient(env)`. If unset it throws a
   `503 CLOUDFLARE_TOKEN_UNSET` and **never** echoes the value.
 - The token is never placed in a response body, D1 row, R2 object, or the browser.
-- Least-privilege: the token only needs *Email Routing* + *Zone/DNS read+edit* on the
+- Least-privilege: the token only needs _Email Routing_ + _Zone/DNS read+edit_ on the
   owner's zones. A Global API Key is **not** supported or required.
 - Log scrubbing: `apps/worker/src/lib/logging.ts` allow-lists safe fields and
   redacts a set of keys (`token`, `authorization`, `cf_authorization`, `api_key`,
@@ -95,18 +95,23 @@ A buyer needs one number from one mailbox, so that is the whole surface.
 `apps/worker/src/env.ts` → `devAuthBypassEnabled()` returns true **only** when
 `DEV_AUTH_BYPASS=="true"` **and** `ENVIRONMENT` is one of `development/local/test`.
 Production config ships `ENVIRONMENT=production`, so the bypass is inert regardless of
-the flag — accidental exposure is structurally impossible.
+the flag. This is a configuration guard, not a deployment boundary: an operator could
+mislabel a public deployment as development. Production configuration and Access policy
+must be verified separately.
 
 ### Passkey step-up (`apps/worker/src/routes/security.ts`, `src/lib/webauthn.ts`)
 
-Access answers *which account* signed in. A step-up answers *is the same person holding
-this device right now*, so a copied session cookie cannot do the irreversible things on its
+Access answers _which account_ signed in. A step-up answers _is the same person holding
+this device right now_, so a copied session cookie cannot do the irreversible things on its
 own. It is asked for, by the route rather than the page, before:
 
 - purging an alias's stored mail (`DELETE /api/aliases/:id` with `purgeMessages`) — a plain
   alias delete, which keeps the mail, does not ask;
+- permanently deleting a message, singly or in bulk;
 - detaching a domain from MailVault;
 - setting a domain's sender-auth policy to `OFF` (tightening it never asks);
+- removing any passkey, including the last one, and turning off semantic indexing;
+- replacing foreign MX, catch-all routing, or DMARC configuration after fresh server preflight;
 - enrolling an additional passkey once one exists — otherwise a hijacked session could
   quietly add the attacker's key and the gate would be theirs.
 
@@ -117,9 +122,12 @@ reload. `userVerification: required`, so the prompt must be a fingerprint, passc
 security key rather than mere presence.
 
 Boundaries worth stating: the relying-party id is the canonical `APP_ORIGIN` host, so a
-passkey enrolled on `mail.tungjp.store` will not unlock the transitional
-`mail.omnipos.tech` hostname. And removing the **last** passkey needs only the signed-in
-identity — that is the break-glass path, because a lost key must not mean a lost account.
+passkey enrolled on one hostname will not unlock another hostname. Removing the **last**
+passkey still needs a valid grant and revokes existing grants. There is no Access-only
+break-glass deletion endpoint. Initial enrollment is allowed when no key exists; losing
+every authenticator requires an independently authorized operator recovery procedure,
+not a copied Access session. Irreversible operations fail closed without a valid grant,
+including when there are no enrolled keys.
 The residual risk is unchanged by this feature: whoever holds your Access session can still
 read everything. Step-up protects what cannot be undone, not confidentiality.
 
@@ -129,8 +137,8 @@ read everything. Step-up protects what cannot be undone, not confidentiality.
 
 - State-changing methods (anything but GET/HEAD/OPTIONS) must carry the custom header
   `x-mailvault: 1`. A cross-site form cannot set custom headers.
-- `Origin` (or `Referer`) host must equal the request host **or** the configured
-  `APP_ORIGIN`. This is why E2E/dev run same-origin.
+- `Origin` (or `Referer`) must match the complete request origin (scheme, host,
+  port) **or** the configured `APP_ORIGIN`. This is why E2E/dev run same-origin.
 - Failures return `403 BAD_ORIGIN`.
 
 ## 5. Response hardening (every response)
@@ -146,7 +154,8 @@ so success, error, 404 and SPA-document responses all get:
   `Cross-Origin-Resource-Policy/Opener-Policy: same-origin`,
   `Referrer-Policy: strict-origin-when-cross-origin`, a restrictive
   `Permissions-Policy`.
-- `Strict-Transport-Security` on API responses in production.
+- `Strict-Transport-Security` on every HTTPS response in production, including
+  the root document and static assets; not on HTTP/development responses.
 
 ## 6. Email content handling (hostile input)
 
@@ -201,53 +210,82 @@ conservative and the UI shows the whole address:
 
 ## 6.2 Sender authentication (`apps/worker/src/mail/auth.ts`)
 
-An OTP inbox is a phishing target: the whole product is "show the owner a code and a
-verification link". Anyone who learns an alias address can therefore try to deliver a
-message that *looks* like it came from a brand, so every message is judged at delivery
-time and the judgement is stored (`messages.auth_verdict` + `auth_json`).
+An OTP inbox is a phishing target: anyone who learns an alias address can deliver a
+message that looks like it came from a brand. Message authentication observations and
+their provenance are stored in `messages.auth_verdict` and `auth_json`.
 
-- **`Authentication-Results` is not trusted as written.** It travels inside the message, so
-  the sender can author `dkim=pass` themselves. A pass only counts when the domain it
-  vouches for (`d=`, `header.d=`, `header.i=`, `smtp.mailfrom=`) **aligns** with the header
-  `From` domain at registrable-domain level — DMARC's own rule. Misaligned passes are
-  recorded as evidence and reported honestly (`spf=pass`) but never credited
-  (`alignedPass.dkim === false`), and the UI labels exactly that distinction.
-- **Verdicts:** `SPOOFED` when `dmarc=fail` (the one result the header cannot fake into
-  usefulness); `TRUSTED` when an aligned `dmarc`/`dkim`/`spf` pass exists; `UNVERIFIED`
-  otherwise — including when no results reached us at all, which is honest rather than
-  alarming.
-- **Enforcement is per domain, default `WARN`:** `OFF` records only, `WARN` records and
-  flags, `REJECT` refuses delivery (`setReject("sender authentication failed")`) — chosen
-  by the owner per domain in the Domains table, never flipped silently.
-- **The payload of a spoofed message is withheld, not just labelled.** `MessageDetail`
-  hides extracted codes and verification links behind an explicit "Show anyway", and the
-  inbox list never echoes a `primaryCode` for a `SPOOFED` message.
-- **Old mail is not re-judged with guesses.** Rows written before this existed carry
-  `UNVERIFIED` with no assessment JSON, and the banner stays silent for them.
+- **MIME authentication headers are observations only.** Both `Authentication-Results` and
+  `Authentication-Results-IANA` are sender-controlled message content. A reporter string
+  such as `cloudflare.com` is not an attestation, and even an aligned `d=`, `header.d=`,
+  `header.i=`, or `smtp.mailfrom=` pass is not proof of provenance. These observations are
+  retained for explanation but never set `alignedPass` or determine the trust verdict.
+- **Verified DKIM is the only verified sender result.** Cloudflare's
+  [Email Workers API](https://developers.cloudflare.com/email-routing/email-workers/)
+  documents an `EmailMessage` that exposes envelope addresses, headers, raw MIME, and
+  size; it does not document a receiver-authenticated SPF/DKIM/DMARC result. Cloudflare's
+  [Postmaster documentation](https://developers.cloudflare.com/email-routing/postmaster/)
+  describes inbound DMARC rejection, but does not expose its result to the Worker. MailVault
+  therefore verifies DKIM cryptographically against the raw bytes during staging (see
+  `docs/sender-auth/SENDER_AUTH_V1.md`). SPF and DMARC are not verified here. We do not infer
+  authentication from transport acceptance or a MIME reporter name.
+- **Verdicts require separate verified evidence.** `TRUSTED` requires an independently
+  verified aligned DKIM pass; `SPOOFED` requires an independently verified aligned DMARC
+  failure. No verified DMARC result is supplied, so raw `dmarc=fail` does not reject
+  delivery. The stored per-domain `OFF`/`WARN`/`REJECT` preference remains, but `REJECT` has
+  no effect until a verified DMARC result is supplied.
+- **Unverified inbound content is withheld, not just labelled.** The inbox hides previews
+  and extracted codes; the detail hides the body, codes, links, and attachments behind an
+  explicit "Show anyway". Replies require `TRUSTED`. Unsubscribe and push detail are also
+  available only for `TRUSTED` messages.
+- **Historical inbound verdicts were revoked.** Migration `0016` resets every inbound verdict
+  to `UNVERIFIED` and clears its assessment JSON because prior rows have no trustworthy
+  provenance. Outbound verdict metadata is left unchanged.
 
 ### 6.3 Ingest durability — `apps/worker/src/index.ts` (`email` + `queue`)
 
-Inbound mail is committed in two invocations so a database hiccup cannot lose a message:
+Inbound mail is committed in two invocations with resumable database failure handling:
 
 - The **email handler** validates the recipient, parses, judges the sender and writes the
   R2 objects (raw `.eml`, parsed JSON, attachments). Only then does it post an `IngestJob`
   to the `mail-ingest` queue. Every `setReject()` decision — unknown recipient, oversize,
-  `REJECT` policy on a spoofed sender — still happens here, because this is the only place
-  still able to answer the sending server.
-- The **queue consumer** commits the D1 row and the FTS entry, then fires push. A failed
-  commit is retried (3 attempts) and then parked in `mail-ingest-dlq`. Nothing is deleted
-  on failure: the staged objects stay exactly where they are, so a redelivery works on the
-  same bytes, and a dead-lettered job still points at a retrievable `.eml`.
+  or a `REJECT` policy on a verified spoofed sender — still happens here, because this is the
+  only place still able to answer the sending server. Raw MIME results cannot trigger it.
+- Before the first R2 PUT, the email handler records every object key in a durable D1
+  manifest (`0019`). Deletion/alias-purge tombstones fence writers. Settled, unlinked
+  tombstones are cleaned by scheduled processing; manifests are retained and re-swept
+  hourly even after an empty pass, so late remote writes remain discoverable.
+  Message-backed manifests are cleaned through deletion jobs, preserving writer fences.
+- Lease expiry is not proof that a remote PUT stopped. An unsettled writer cannot yield
+  a successful purge receipt; deletion remains pending/failed with identifiers retained.
+  STAGED queue/DLQ input is not expired or erased merely because its lease is old.
+- The **queue consumer** uses the staged `messageId` as the canonical D1 id and reconciles
+  message metadata, attachment rows and FTS in a D1 batch. Rules and opt-in semantic indexing
+  have retryable lifecycle states; failures retry instead of acknowledging incomplete work.
+  A job that exhausts its retry budget is parked in `mail-ingest-dlq` with its staged R2 keys.
+- A replay of the same staged job is idempotent. A different job with the same content is
+  treated as a true duplicate only after the canonical record is fully committed; cleanup
+  deletes only its own objects proven unreferenced by D1.
+- `received_at` and the raw-key date partition come from receiver-side arrival time;
+  a valid MIME `Date` is preserved independently in nullable `header_date`.
 
 **The queue carries keys and SMTP addressing only** — `rawKey`, `parsedKey`, alias/domain
 ids, dedupe key, envelope. No subject, body, extracted code or link crosses it, verified by
 test. That matters because a queue and its dead-letter are a second store the owner does
 not browse; they must not quietly become an unauthenticated copy of somebody's mail. R2
-remains the only place message content lives.
+holds canonical raw/parsed bodies and attachments; D1 also stores metadata and extracted
+facts, and the opt-in vector index holds derived representations.
 
-Codes, links, preview and the auth verdict are *re-derived* at commit time from the staged
+Codes, links, preview and the auth verdict are _re-derived_ at commit time from the staged
 parse by the same pure functions — one assessment per message, and the stored verdict
 cannot disagree with the one that was judged at the edge.
+
+The operator tool `apps/worker/scripts/ingest-dlq.mjs` is read-only by default. It peeks
+without leasing from the DLQ, classifies each key-only job against D1 and private R2, and
+prints identifiers and state only. Configure `CF_ACCOUNT_ID`, `MAIL_INGEST_DLQ_ID`,
+`MAILVAULT_D1_ID` (optional when the Wrangler config is current), and `CLOUDFLARE_API_TOKEN`,
+then run `node apps/worker/scripts/ingest-dlq.mjs`. Add `MAIL_INGEST_QUEUE_ID` and pass the
+explicit `--replay` flag to enqueue eligible jobs to `mail-ingest`; replay does not remove
+or acknowledge the DLQ source. The tool never logs message content or credentials.
 
 ### 6.4 Live updates — `apps/worker/src/live/hub.ts`, `apps/web/src/lib/live.ts`
 
@@ -274,14 +312,16 @@ Keyword search (FTS5) needs the exact words. Semantic search does not, and the p
 
 So it is a deliberate switch in Settings, off by default, and:
 
-- nothing is embedded while it is off — not on ingest, not on search, not on backfill
-  (`POST /api/semantic/backfill` refuses);
+- no new indexing is scheduled while it is off — not on ingest, not on search, not on
+  backfill (`POST /api/semantic/backfill` refuses). An already-active remote writer
+  may complete after disable; disabling is not a synchronous external-purge guarantee;
 - a client cannot ask for semantic ids. `semanticIds` is a server-side parameter resolved
   from the index only when the setting is on, so the opt-in cannot be bypassed by crafting
   a query;
-- turning it off **deletes the vectors** and clears `messages.embedded_at`, so "off" means
-  the copies are gone rather than merely unused;
-- deleting a message deletes its vector;
+- turning it off stops new semantic work and attempts a bounded, paginated purge of
+  indexed vectors. A provider failure can leave copies behind; inspect `indexed / total`
+  and retry the authenticated disable request. The toggle alone is not a purge receipt;
+- message deletion retains its vector id in a durable cleanup job until deletion succeeds;
 - the excerpt is truncated on purpose — less text in the index is less text to explain.
 
 `indexed / total` is shown in Settings, so the claim is checkable rather than taken on
@@ -293,7 +333,7 @@ sits in the same account as the mail itself, protected by the same Access policy
 `parseMime` stores the sender's `List-Unsubscribe` and whether it declared
 `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). Both are **sender-authored
 text**, stored verbatim, and only rendered by the reading view when the message's verdict is
-`TRUSTED` — that is, when SPF or DKIM passed *and* aligned with the header `From`.
+`TRUSTED` — which requires independently verified aligned sender-auth evidence.
 
 Why the gate is the verdict and not the URL's shape: hitting an unsubscribe endpoint proves the
 address is read by a human. That is a thing a forger is happy to buy, so a message that failed
@@ -348,13 +388,13 @@ composes from the owner's mail client rather than from anything MailVault sends.
 - **The push carries no content; the worker asks for it afterwards.** The server sends a
   bodyless POST, so the push service sees an empty request (`test/unit/push.test.ts` asserts
   that). The service worker then calls `/api/messages?filter=unread` with its own session
-  cookies and quotes the newest message that is unread, `TRUSTED` (aligned SPF/DKIM/DMARC)
+  cookies and quotes the newest message that is unread and `TRUSTED` (verified aligned SPF/DKIM/DMARC)
   and minutes old — sender plus subject only, with any code the server identified masked and
   URLs collapsed to `[link]`. Everything else (signed out, offline, Access answering instead
   of the API, nothing recent, a spoofed sender) falls back to the fixed "New mail arrived".
   `src/lib/notify.test.ts` covers those rules; the phone E2E runs them inside the installed
   worker, where the real cookies live.
-- **What that costs, deliberately:** the subject of *trusted* mail now appears on the lock
+- **What that costs, deliberately:** the subject of _trusted_ mail now appears on the lock
   screen of every device holding the installation, without an Access prompt. Codes and
   unauthenticated senders are excluded exactly because a spoofed message choosing its own
   lock-screen text is the attack this product attracts. OS "hide content when locked" is the
@@ -363,21 +403,30 @@ composes from the owner's mail client rather than from anything MailVault sends.
   any API response, never logged, and never cached by the service worker. `/api/push/status`
   reports a count, not the endpoints; the integration test asserts the response body does not
   contain the stored URL.
-- **Validation + self-healing.** Only HTTPS endpoints of bounded length are accepted
-  (`isUsableEndpoint`), re-subscribing the same endpoint updates keys and clears the failure
-  counter rather than duplicating rows, a `404/410` prunes immediately, and a repeated
-  failure prunes after 5 attempts so dead endpoints cannot accumulate.
+- **Validation + self-healing.** `isUsableEndpoint` accepts only HTTPS port 443 endpoints
+  for Chrome/Chromium's `fcm.googleapis.com`, Firefox's
+  `updates.push.services.mozilla.com`, Edge's `*.notify.windows.com`, and Safari's
+  `*.push.apple.com` ([Chrome](https://developer.chrome.com/blog/web-push-interop-wins) and
+  [FCM host](https://firebase.google.com/docs/cloud-messaging/network-configuration),
+  [Mozilla](https://mozilla-services.github.io/autopush-rs/http.html),
+  [Edge/WNS](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/forcebuiltinpushmessagingclient) and
+  [WNS host allowlist](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/push-notifications/firewall-allowlist-config),
+  [Apple](https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers.md)).
+  Credentials, non-443 ports, IP literals, and other hosts are rejected, and sends use
+  `redirect: "error"`. Caller-defined and self-hosted push providers are deliberately
+  unsupported. Re-subscribing the same endpoint updates keys and clears the failure counter
+  rather than duplicating rows, a `404/410` prunes immediately, and repeated failures prune
+  after 5 attempts so dead endpoints cannot accumulate.
 - **Push can never break delivery.** Notification is fired with `ctx.waitUntil` after the
   message is durable, and `pushToAll` never throws — an unreachable push provider cannot
   reject or duplicate a real email.
 - **The VAPID private key is a Worker secret** (`VAPID_PRIVATE_KEY`, a P-256 JWK). The public
   half is derived from it, so the two can never disagree, and the derivation is checked
   against `crypto.subtle`'s own `raw` export.
-- **A subscription is owner-supplied, and that is the whole trust model.** Only a signed-in
-  owner can register an endpoint, so the Worker will POST a bodyless request to an HTTPS URL
-  they chose. There is no payload to leak, the VAPID assertion is audience-scoped to that
-  origin, and the response is never returned to a caller — so the reachability an attacker
-  would want here is already limited to the owner's own account.
+- **Push destination policy is enforced independently of owner authentication.** A signed-in
+  owner can register only an endpoint from the provider allowlist above; legacy stored rows
+  are revalidated before sending as well. VAPID authorization is scoped to the permitted
+  endpoint's origin, redirects fail closed, and no message payload is sent.
 - The service worker never caches `/api/*` and never proxies a cross-origin request, so the
   offline shell cannot become an unaccessed copy of private mail.
 
@@ -393,10 +442,9 @@ a chain of refusals, each with its own reason code that the UI translates.
 - **A reply's recipient comes from the stored message**, not the request: `Reply-To` first,
   then `From` (and the original `To` when answering your own sent mail). A crafted body
   cannot point a reply at somebody who never appears in the conversation.
-- **Answering a message that failed sender authentication is refused** (`SPOOFED_PARENT`).
-  Replying is the one action a phisher cannot do for you, so the verdict already recorded on
-  the row gates it. This check runs **before** the transport is consulted, so "this server
-  cannot send" is never the stated reason for a message that should not have been sent at all.
+- **Answering inbound mail requires `TRUSTED`.** Replies to `SPOOFED` or `UNVERIFIED` messages
+  are refused before the transport is consulted, so an unavailable sending binding never
+  obscures the authentication refusal.
 - **The message is written before it is sent** (raw copy + parsed body in R2, metadata row
   with `direction='OUT'`), then updated with what the transport said. A send that succeeds
   while the database is unhappy cannot produce mail the owner sent and never sees again; a
@@ -488,16 +536,16 @@ whole alias:
   discovery.
 - **Preflight is read-only** (`preflight.ts`) — proven by `test/unit/preflight.test.ts`
   asserting an empty mutation list. It classifies each zone and returns evidence.
-- **Foreign MX is never overwritten *by default*** (`mx.ts`): Google Workspace, Microsoft 365,
+- **Foreign MX is never overwritten _by default_** (`mx.ts`): Google Workspace, Microsoft 365,
   Zoho, Fastmail, Yahoo, Apple, Proton, Mimecast, Proofpoint, Barracuda, SpamTitan, IONOS,
-  Amazon SES, Migadu and Yandex 360 signatures — and *any* non-Cloudflare host — mark
+  Amazon SES, Migadu and Yandex 360 signatures — and _any_ non-Cloudflare host — mark
   `MX_CONFLICT` → `safeToProvision=false`, default **skip**. Only Cloudflare Email
   Routing MX counts as "ours". The IONOS/SES/Migadu/Yandex entries were added from
   hostnames actually observed in the owner's account.
 - **An MX take-over exists, and it is the owner pulling the trigger** (`allowMxTakeover`):
   the Domains UI lists the exact records that will be deleted per selected domain, the
   confirm is a separate checkbox from the catch-all one (a catch-all confirmation buys no
-  MX deletion — tested), and each record is written to `provisioning_events` *before* it is
+  MX deletion — tested), and each record is written to `provisioning_events` _before_ it is
   removed so the domain can be handed back. Matching requires `type === "MX"` plus an
   exchange the preflight named as foreign, so Cloudflare's own routing MX cannot be caught.
   Nothing but MX is touched: enabling routing does not add a second SPF, so deleting the
@@ -509,15 +557,16 @@ whole alias:
 - **Foreign catch-all** marks `CATCH_ALL_CONFLICT`; a takeover requires an explicit
   `allowCatchAllTakeover` confirmation from the owner (surfaced in the Domains UI).
 - **Provisioning is allow-listed, not block-listed** (`provisioner.ts`). It mutates only
-  when preflight returns `READY_TO_PROVISION`, `ALREADY_CONFIGURED`, or a conflict *with*
+  when preflight returns `READY_TO_PROVISION`, `ALREADY_CONFIGURED`, or a conflict _with_
   the matching explicit confirmation from the owner (`CATCH_ALL_CONFLICT` →
   `allowCatchAllTakeover`, `MX_CONFLICT` → `allowMxTakeover`). Everything else —
   including a preflight read that Cloudflare refused — stops before any write. A token
-  that cannot *see* a zone is therefore never able to *change* it. This replaced an
+  that cannot _see_ a zone is therefore never able to _change_ it. This replaced an
   earlier block-list that let an unrecognized classification fall through to mutation,
-  found only by exercising the live API.
-- **`cfCode 10000` is ambiguous, and provision must not guess.** Measured live: `POST
-  /zones/{id}/email/routing/enable` returns the same 403 `Authentication error` for a zone
+  found historically by exercising the live API. Those operator observations are not
+  independently reverified by this local remediation.
+- **`cfCode 10000` is ambiguous, and provision must not guess.** Historical operator evidence (not reverified here): `POST
+/zones/{id}/email/routing/enable` returns the same 403 `Authentication error` for a zone
   outside the token's Zone Resources as it would for a missing permission — this is what
   first masqueraded as "an API token cannot enable Email Routing". It can, and now does:
   with the zone in scope a clean zone reached `READY` purely through the app. The endpoint
@@ -529,17 +578,17 @@ whole alias:
   the token's Zone Resources — and says whether this run already deleted the domain's MX.
   See `DEPLOYMENT.md`.
 - **Drift is detected, never "repaired".** `provisioning/watchdog.ts` runs hourly
-  (`triggers.crons`) and on demand from *Verify delivery*, re-reading the delivery path of
+  (`triggers.crons`) and on demand from _Verify delivery_, re-reading the delivery path of
   domains MailVault believes work. If Cloudflare's routing MX disappeared or the catch-all
   was moved to another destination, the domain is marked `CONFLICT / DRIFT` with the new
   destination named — it **never** re-enables routing or rewrites the catch-all to win mail
   back, because someone else's configuration is not MailVault's to overwrite. It restores a
-  domain to `READY` only if *it* was the one that marked it drifted (an MX-conflict domain
+  domain to `READY` only if _it_ was the one that marked it drifted (an MX-conflict domain
   is never resurrected because routing happens to look fine), and an unreadable zone is
   recorded as unknown rather than downgraded.
-- **Zone Resources are account-wide on purpose.** The token scopes its zone permissions to
+- **Historical token scope (not verified in this review).** The documented token scopes its zone permissions to
   `All zones from an account`, not a per-zone list, so adding a domain never requires
-  editing the token. Widening a *resource* does not widen a *capability* — it only changes
+  editing the token. Widening a _resource_ does not widen a _capability_ — it only changes
   which zones the same four permissions apply to: `Zone:Read`, `DNS:Read` and
   `Email Routing Addresses:Read` are read-only, and the one write,
   `Email Routing Rules:Edit`, reaches the catch-all rule and (through the same permission)
@@ -547,30 +596,33 @@ whole alias:
   bounded in code, not by the token: mutation happens only behind the allow-list gate
   above, only for a zone the owner imported and selected (a zone absent from `domains` is
   refused before any API call — `test/unit/provisioner.test.ts`), only via an
-  authenticated owner-triggered route, and never for foreign MX. Measured on the owner's
+  authenticated owner-triggered route; foreign-MX takeover additionally requires a fresh
+  conflict decision, explicit confirmation and passkey step-up. Historically measured on the owner's
   account: sync + preflight classified 38/38 zones and reported 35 conflicts with zero
   writes; one clean zone was then enabled deliberately, by the owner, in one click.
-- **No unused write permissions.** `DNS:Edit` was granted during diagnosis, shown by
+- **Historical permission diagnosis (not reverified here).** `DNS:Edit` was granted during diagnosis, shown by
   measurement to unlock nothing required, and reverted to `DNS:Read`.
-- **Removing a domain** deletes only the local row; the code refuses while aliases
+- **Removing a domain** deletes only the local row; the code refuses while aliases or historical messages
   exist and **never** deletes the Cloudflare zone or its DNS.
 - Every Cloudflare-side operation is wrapped so API/permission/rate-limit errors map
   to safe `asApiError` codes without leaking the token. Diagnostics log only the API
   path, status and Cloudflare error code — never headers, bodies or the token.
 
 ## 10. Data retention — nothing auto-expires
-`migrations/0001_init.sql` and the app have **no** TTL, cron, lifecycle rule, or
-background job that deletes mailbox content. Aliases and messages persist until the
-owner explicitly deletes them, and message deletion only purges content when asked.
-The one scheduled job that exists (`7 * * * *`) is the read-only drift watchdog in §9;
-it writes status columns and never touches a message, an alias or a zone.
+
+There is no age-based expiry or rule-driven deletion of mailbox content. Aliases and
+messages persist until the owner explicitly requests deletion. That request creates
+durable cleanup jobs: normal reads hide pending content, while D1 retains cleanup
+identifiers until external deletion succeeds. Scheduled processing retries those jobs
+before the drift-watchdog credential check; it is not a retention policy. Failed jobs
+are observable and may be explicitly retried; they are not reported as completed.
 
 **Rules inherit this limit.** `packages/shared/src/rules.ts` accepts only `archive` and
 `tag` as actions — there is no delete verb for a rule to reach — and filing sets
 `messages.archived = 1`, which moves mail out of the working list and nothing else. The
 `Filed` tab and `archived=all` still return it. A rule records how it was worded at the
 moment it acted (`applied_rule_note`), so an archive from last month is explainable after
-the rule is edited or removed, and rule evaluation runs *after* the message row is
+the rule is edited or removed, and rule evaluation runs _after_ the message row is
 committed, wrapped so a broken rule can never cost the owner mail that arrived.
 
 ## 11. Input validation
@@ -587,7 +639,7 @@ length, pagination limits (≤200), filter enums, etc. Validation failures retur
   usable remains, so a hostile query returns zero rows instead of a `500`. Proven by
   `test/integration/ingest.test.ts` ("FTS5 syntax attacks").
 - **Operators are read server-side, and only from a fixed list.** `from: to: has: is: in:
-  after: before:` are parsed out of `q` by the Worker itself rather than taken from whatever
+after: before:` are parsed out of `q` by the Worker itself rather than taken from whatever
   the client decided the query meant, and each maps to a bound comparison against named
   columns. An unrecognised `something:else` stays an ordinary pair of words — a search that
   silently turned into "no filters at all" or "show nothing" would both leak and hide. Column
@@ -614,4 +666,4 @@ length, pagination limits (≤200), filter enums, etc. Validation failures retur
 - **OTP/verification links** are sensitive; treat the inbox like a password manager.
 - **E2E suite** runs against a local `wrangler dev` Worker with `DEV_AUTH_BYPASS=true`
   in `ENVIRONMENT=development`. That config must never be deployed; the production
-  config ships `ENVIRONMENT=production`, where the bypass is inert by construction.
+  config ships `ENVIRONMENT=production`, where the bypass is disabled by that configuration.

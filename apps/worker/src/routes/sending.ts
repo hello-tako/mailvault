@@ -214,7 +214,7 @@ export const sendingRoute = new Hono<AppEnv>()
         { records: preview.records, issues: preview.issues },
       );
     }
-    if (preview.dmarcConflict) await requireStepUp(c);
+    if (preview.dmarcConflict) await requireStepUp(c, "dmarc.takeover");
     if (preview.alreadyEnabled) {
       return c.json({ domainId: domain.id, sendingStatus: SendingStatus.Enabled, alreadyEnabled: true });
     }

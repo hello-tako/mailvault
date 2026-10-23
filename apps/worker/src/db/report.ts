@@ -1,3 +1,4 @@
+import { visibleMessageSql } from "./visibility";
 import type { AddressReuse } from "@mailvault/shared";
 
 interface ReuseRow {
@@ -13,7 +14,7 @@ interface ReuseRow {
  *
  * Matched on the SMTP envelope sender, because that is the address the mail actually came
  * from — a `From:` header can claim anything, and a report about where an address leaked
- * has to be built from something the sender cannot forge past SPF.
+ * uses an observed envelope, not a verified sender identity.
  */
 export async function addressReuseReport(db: D1Database): Promise<AddressReuse[]> {
   const { results } = await db
@@ -24,7 +25,7 @@ export async function addressReuseReport(db: D1Database): Promise<AddressReuse[]
               MIN(m.received_at) AS first_seen,
               MAX(m.received_at) AS last_seen
        FROM messages m
-       WHERE m.envelope_from IS NOT NULL AND m.envelope_from LIKE '%@%' AND m.alias_id IS NOT NULL
+       WHERE ${visibleMessageSql()} AND m.envelope_from IS NOT NULL AND m.envelope_from LIKE '%@%' AND m.alias_id IS NOT NULL
        GROUP BY sender_domain
        HAVING aliases > 1
        ORDER BY aliases DESC, messages DESC`,

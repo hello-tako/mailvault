@@ -1,3 +1,4 @@
+import { withStepUp } from "../lib/passkeys";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { navigate, useRoute } from "../lib/router";
@@ -93,7 +94,11 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   const mailboxes = useMemo(
     () =>
       selectableMailboxes(
-        (domains.data?.items ?? []).map((d) => ({ domainId: d.id, name: d.name, mailStatus: d.mailStatus })),
+        (domains.data?.items ?? []).map((d) => ({
+          domainId: d.id,
+          name: d.name,
+          mailStatus: d.mailStatus,
+        })),
         domainId,
       ),
     [domains.data, domainId],
@@ -197,7 +202,9 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
         });
       }
       try {
-        await api.bulkMessages(selection.ids, action);
+        await (action === BulkMessageAction.Delete
+          ? withStepUp(() => api.bulkMessages(selection.ids, action))
+          : api.bulkMessages(selection.ids, action));
         selection.clear();
         setConfirmDelete(false);
         reloadCounters();
@@ -245,7 +252,8 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
       const start = dir === 1 ? from + 1 : from - 1;
       const candidates = forward.filter((i) => (dir === 1 ? i > start - 1 : i < start + 1));
       const nextUnread = candidates.find((i) => !items[i]?.isRead);
-      const idx = nextUnread ?? candidates.find((i) => items[i]) ?? (dir === 1 ? 0 : items.length - 1);
+      const idx =
+        nextUnread ?? candidates.find((i) => items[i]) ?? (dir === 1 ? 0 : items.length - 1);
       const target = items[idx];
       if (target) openMessage(target.id);
     },
@@ -279,7 +287,12 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
         return;
       }
       const el = document.activeElement;
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      )
+        return;
       if (items.length === 0) return;
       const idx = items.findIndex((m) => m.id === openId);
       const key = e.key.toLowerCase();
@@ -520,4 +533,3 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
     </div>
   );
 }
-

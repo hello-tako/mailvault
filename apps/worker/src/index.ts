@@ -13,14 +13,13 @@ import { decorateResponse } from "./security/headers";
 import { stageEmail, commitIngest, type IngestJob } from "./mail/ingest";
 import { isPortalHost } from "./portal/link";
 import { consumeDeliveryEvents } from "./mail/delivery";
-import { deleteKeys } from "./storage/r2";
 import { pushToAll } from "./push";
 import { Elapsed, writeMetric } from "./lib/metrics";
 import { recordOpsFailure } from "./lib/ops-alert";
-import { indexIfEnabled } from "./lib/semantic";
 import { MailboxHub, notifyNewMail } from "./live/hub";
 import { log } from "./lib/logging";
 import { runWatchdog } from "./provisioning/watchdog";
+import { drainDeletionJobs } from "./db/deletions";
 
 // Durable Object classes must be exported from the entry module.
 export { MailboxHub };
@@ -78,18 +77,16 @@ export default {
         });
         return;
       }
-      try {
-        await env.MAIL_INGEST_QUEUE.send(staged.job);
-      } catch (err) {
-        // The job never reached the queue, so the staged objects would be orphans with
-        // nothing pointing at them. Remove them and let delivery retry from the top.
-        await deleteKeys(env.MAIL_BUCKET, staged.keys);
-        throw err;
-      }
+      // Do not delete staged objects when send fails: the queue may have accepted the job.
+      await env.MAIL_INGEST_QUEUE.send(staged.job);
       writeMetric(env, "ingest", { outcome: "staged", stageMs });
     } catch (err) {
       // Rejected for retry; log without body/token (section 34). The throw is deliberate.
-      writeMetric(env, "ingest", { outcome: "failed", reason: "handler_error", stageMs: timer.stop() });
+      writeMetric(env, "ingest", {
+        outcome: "failed",
+        reason: "handler_error",
+        stageMs: timer.stop(),
+      });
       log.error("email_handler_failed", { error: err instanceof Error ? err.message : "error" });
       throw err;
     }
@@ -122,9 +119,24 @@ export default {
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     void ctx;
+    try {
+      const report = await drainDeletionJobs(env);
+      log.info("deletion_drain", {
+        cron: controller.cron,
+        claimed: report.claimed,
+        completed: report.completed,
+        failed: report.failed,
+        deferred: report.deferred,
+      });
+    } catch (err) {
+      log.error("deletion_drain_failed", { error: err instanceof Error ? err.message : "error" });
+    }
+
     const token = env.CLOUDFLARE_API_TOKEN;
     if (!token || !env.MAIL_WORKER_NAME) {
-      log.warn("watchdog_skipped", { reason: token ? "MAIL_WORKER_NAME unset" : "API token unset" });
+      log.warn("watchdog_skipped", {
+        reason: token ? "MAIL_WORKER_NAME unset" : "API token unset",
+      });
       return;
     }
     const timer = new Elapsed();
@@ -144,7 +156,11 @@ export default {
         failed: report.failed.length,
       });
     } catch (err) {
-      writeMetric(env, "watchdog", { outcome: "failed", reason: "run_error", commitMs: timer.stop() });
+      writeMetric(env, "watchdog", {
+        outcome: "failed",
+        reason: "run_error",
+        commitMs: timer.stop(),
+      });
       log.error("watchdog_run_failed", { error: err instanceof Error ? err.message : "error" });
     }
   },
@@ -163,7 +179,7 @@ async function consumeIngestBatch(
   for (const message of batch.messages) {
     const timer = new Elapsed();
     try {
-      const result = await commitIngest(message.body, env.DB, env.MAIL_BUCKET);
+      const result = await commitIngest(message.body, env.DB, env.MAIL_BUCKET, env);
       writeMetric(env, "ingest_commit", {
         outcome: result.status,
         verdict: result.status === "stored" ? result.verdict : undefined,
@@ -173,14 +189,16 @@ async function consumeIngestBatch(
         // Notify only after the mail is durable, and detached: a slow or dead push
         // endpoint must never affect delivery or make the message retry.
         ctx.waitUntil(
-          Promise.allSettled([pushToAll(env, env.DB), notifyNewMail(env), indexIfEnabled(env, result.messageId)]).then(
-            () => undefined,
-          ),
+          Promise.allSettled([pushToAll(env, env.DB), notifyNewMail(env)]).then(() => undefined),
         );
       }
       message.ack();
     } catch (err) {
-      writeMetric(env, "ingest_commit", { outcome: "failed", reason: "commit_error", commitMs: timer.stop() });
+      writeMetric(env, "ingest_commit", {
+        outcome: "failed",
+        reason: "commit_error",
+        commitMs: timer.stop(),
+      });
       log.error("ingest_commit_failed", {
         attempt: message.attempts,
         error: err instanceof Error ? err.message : "error",

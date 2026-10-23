@@ -13,6 +13,7 @@ import {
   type ImportAliasesResult,
 } from "@mailvault/shared";
 import type { AppEnv } from "../app-env";
+import { requestAliasPurge } from "../db/deletions";
 import {
   aliasStats,
   aliasExists,
@@ -30,7 +31,6 @@ import { log } from "../lib/logging";
 import { portalOrigin, portalPath } from "../portal/link";
 import { randomLocalPart, nowIso } from "../lib/util";
 import { normalizeLookupAddress, splitAddress } from "../mail/normalize";
-import { deleteKeys } from "../storage/r2";
 import { actorOf, parseQuery, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
 
@@ -152,7 +152,12 @@ export const aliasesRoute = new Hono<AppEnv>()
       localPart,
       label: body.label ?? null,
     });
-    log.info("alias_created", { actor: actorOf(c).email, aliasId: alias.id, domainId: domain.id, mode: body.mode });
+    log.info("alias_created", {
+      actor: actorOf(c).email,
+      aliasId: alias.id,
+      domainId: domain.id,
+      mode: body.mode,
+    });
     return c.json(alias, 201);
   })
 
@@ -181,21 +186,32 @@ export const aliasesRoute = new Hono<AppEnv>()
   })
 
   /**
-   * Delete an alias. With purgeMessages the owner opts into permanently removing
-   * that mailbox's stored mail too — we delete DB rows then best-effort purge R2
-   * (section 23/24). Without it, messages are preserved and detached (SET NULL).
+   * A purge disables the alias and schedules bounded durable cleanup. A plain delete
+   * preserves historical mail and detaches it from the alias (SET NULL).
    */
   .delete("/api/aliases/:id", async (c) => {
     const { id } = IdParam.parse({ id: c.req.param("id") });
     const { purgeMessages } = await readJson(c, DeleteAliasSchema);
+    if (purgeMessages) {
+      await requireStepUp(c, "alias.purge");
+      const result = await requestAliasPurge(c.env.DB, id);
+      if (!result.found) throw notFound("Alias not found");
+      log.info("alias_purge_queued", { actor: actorOf(c).email, aliasId: id, state: result.state });
+      return c.json(
+        { deleted: result.state === "DONE", purgedMessages: true, state: result.state },
+        result.state === "DONE" ? 200 : 202,
+      );
+    }
+
     if (!(await getAliasById(c.env.DB, id))) throw notFound("Alias not found");
-    // Purging stored mail is the one alias operation that cannot be undone, so it asks for
-    // the passkey. A plain delete keeps the mail and needs no second factor.
-    if (purgeMessages) await requireStepUp(c);
-    const { rawKeys } = await deleteAlias(c.env.DB, id, purgeMessages);
-    if (rawKeys.length) await deleteKeys(c.env.MAIL_BUCKET, rawKeys);
-    log.info("alias_deleted", { actor: actorOf(c).email, aliasId: id, purgeMessages, r2Keys: rawKeys.length });
-    return c.json({ deleted: true, purgedMessages: purgeMessages, r2ObjectsRemoved: rawKeys.length });
+    await deleteAlias(c.env.DB, id, false);
+    log.info("alias_deleted", {
+      actor: actorOf(c).email,
+      aliasId: id,
+      purgeMessages: false,
+      r2Keys: 0,
+    });
+    return c.json({ deleted: true, purgedMessages: false, r2ObjectsRemoved: 0 });
   })
 
   /*
@@ -235,4 +251,5 @@ export const aliasesRoute = new Hono<AppEnv>()
     if (!removed) throw notFound("Link not found");
     log.info("portal_link_revoked", { actor: actorOf(c).email, aliasId: id, grantId });
     return c.json({ revoked: true });
+
   });

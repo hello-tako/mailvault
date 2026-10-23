@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { openFold, resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
+import { resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
 
 /*
  * Layout contract for the phone build. These assert the things that silently break a
@@ -22,7 +22,9 @@ async function fitsViewport(page: Page, where: string) {
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
   }));
-  expect(scrollWidth, `${where} must not overflow horizontally`).toBeLessThanOrEqual(clientWidth + 1);
+  expect(scrollWidth, `${where} must not overflow horizontally`).toBeLessThanOrEqual(
+    clientWidth + 1,
+  );
 }
 
 /*
@@ -46,16 +48,24 @@ async function popoverFits(menu: Locator, where: string) {
       vw: window.innerWidth,
       barTop: bar && bar.top > window.innerHeight / 2 ? bar.top : window.innerHeight,
       visibleAtCentre: !!at && el.contains(at),
-      itemHeights: [...el.querySelectorAll('[role="menuitem"]')].map((b) => b.getBoundingClientRect().height),
+      itemHeights: [...el.querySelectorAll('[role="menuitem"]')].map(
+        (b) => b.getBoundingClientRect().height,
+      ),
     };
   });
   const box = `pop=[${[probe.top, probe.right, probe.bottom, probe.left].map(Math.round).join(", ")}] vw=${probe.vw} barTop=${Math.round(probe.barTop)}`;
   expect(probe.visibleAtCentre, `${where}: popover is clipped or covered (${box})`).toBe(true);
   expect(probe.top, `${where}: popover runs above the viewport (${box})`).toBeGreaterThanOrEqual(0);
-  expect(probe.bottom, `${where}: popover hides behind the bottom tab bar (${box})`).toBeLessThanOrEqual(probe.barTop + 1);
+  expect(
+    probe.bottom,
+    `${where}: popover hides behind the bottom tab bar (${box})`,
+  ).toBeLessThanOrEqual(probe.barTop + 1);
   expect(probe.left, `${where}: popover goes off the left edge (${box})`).toBeGreaterThanOrEqual(0);
-  expect(probe.right, `${where}: popover goes off the right edge (${box})`).toBeLessThanOrEqual(probe.vw);
-  for (const h of probe.itemHeights) expect(h, `${where}: menu item too small to tap`).toBeGreaterThanOrEqual(40);
+  expect(probe.right, `${where}: popover goes off the right edge (${box})`).toBeLessThanOrEqual(
+    probe.vw,
+  );
+  for (const h of probe.itemHeights)
+    expect(h, `${where}: menu item too small to tap`).toBeGreaterThanOrEqual(40);
 }
 
 /*
@@ -77,7 +87,9 @@ async function openAliases(page: Page) {
   return page.locator(".entity").filter({ hasText: SEEDED_ALIAS_ADDRESS });
 }
 
-test("phone: every screen fits the viewport, is labelled, and screenshots clean @mobile", async ({ page }) => {
+test("phone: every screen fits the viewport, is labelled, and screenshots clean @mobile", async ({
+  page,
+}) => {
   for (const [name, path] of SCREENS) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -111,7 +123,9 @@ test("phone: text controls are 16px so iOS never zooms on focus @mobile", async 
   expect(height).toBeGreaterThanOrEqual(44);
 });
 
-test("phone: the inbox is a card list, searchable, and never shows a forged code @mobile", async ({ page }) => {
+test("phone: the inbox is a card list, searchable, and never shows a forged code @mobile", async ({
+  page,
+}) => {
   await openInbox(page);
   await expect(page.locator(".msg")).toHaveCount(5);
   await expect(page.locator(".msg.unread")).toHaveCount(2);
@@ -122,7 +136,7 @@ test("phone: the inbox is a card list, searchable, and never shows a forged code
   await expect(list.locator(".msg-code")).toHaveCount(2);
   await expect(list.locator(".msg", { hasText: "verification code" }).locator(".msg-code")).toHaveText(/55905149/);
   await expect(list.locator(".msg", { hasText: "Urgent" }).locator(".msg-code")).toHaveCount(0);
-  await expect(list.getByText("unverified sender")).toBeVisible();
+  await expect(list.locator(".msg", { hasText: "Urgent" }).getByText("unverified sender")).toBeVisible();
 
   // Two lines and nothing else: the card this replaces was ~120px, and the row's height is
   // what decides how much mail a phone screen holds.
@@ -136,11 +150,13 @@ test("phone: the inbox is a card list, searchable, and never shows a forged code
   await page.screenshot({ path: "e2e-screens/inbox-list.png", fullPage: true });
 });
 
-test("phone: opening spoofed mail explains it before showing anything clickable @mobile", async ({ page }) => {
+test("phone: opening spoofed mail explains it before showing anything clickable @mobile", async ({
+  page,
+}) => {
   await openInbox(page);
   await page.locator(".msg", { hasText: "Urgent" }).locator("a").click();
 
-  await expect(page.getByText("Codes and verification links are hidden")).toBeVisible();
+  await expect(page.getByText("Unverified message content is hidden.")).toBeVisible();
   await expect(page.locator(".code-card")).toHaveCount(0);
   await expect(page.locator(".link-card")).toHaveCount(0);
   await page.screenshot({ path: "e2e-screens/message-spoofed.png" });
@@ -151,9 +167,12 @@ test("phone: opening spoofed mail explains it before showing anything clickable 
 
 const STRESS_MSG = "00000000-0000-4000-8000-0000000000m5";
 
-test("phone: a folded magic link, a tracking wrapper and an ASCII table all read cleanly @mobile", async ({ page }) => {
+test("phone: a folded magic link, a tracking wrapper and an ASCII table all read cleanly @mobile", async ({
+  page,
+}) => {
   await page.goto(`/#/messages/${STRESS_MSG}`);
-  await openFold(page, "Verification links");
+  // The merged reader shows the links as a section, not a fold; the cards are the same.
+  await expect(page.getByRole("heading", { name: "Verification links" })).toBeVisible();
   const cards = page.locator(".link-card");
   await expect(cards).toHaveCount(4);
 
@@ -178,7 +197,13 @@ test("phone: a folded magic link, a tracking wrapper and an ASCII table all read
   // Real mail is built from tables with width="300" cells; inside a 360px frame that has to
   // shrink rather than pan, because a frame you scroll sideways is unreadable on a phone.
   await expect
-    .poll(() => frame.locator("body").evaluate((b) => (b.ownerDocument ?? document).documentElement.scrollWidth - window.innerWidth))
+    .poll(() =>
+      frame
+        .locator("body")
+        .evaluate(
+          (b) => (b.ownerDocument ?? document).documentElement.scrollWidth - window.innerWidth,
+        ),
+    )
     .toBeLessThanOrEqual(1);
   await page.locator("iframe.email-frame").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "e2e-screens/message-stress-html.png" });
@@ -186,8 +211,13 @@ test("phone: a folded magic link, a tracking wrapper and an ASCII table all read
   // Plain text: paragraphs flow, and the indented summary keeps its columns in a box that
   // scrolls by itself instead of widening the page.
   await page.getByRole("button", { name: "Show plain text" }).click();
-  await expect(page.locator("pre.text-plain").first()).toContainText("  device     Chrome 129 on macOS 15.6");
-  await expect(page.locator(".text-body a").first()).toHaveAttribute("rel", "noopener noreferrer nofollow");
+  await expect(page.locator("pre.text-plain").first()).toContainText(
+    "  device     Chrome 129 on macOS 15.6",
+  );
+  await expect(page.locator(".text-body a").first()).toHaveAttribute(
+    "rel",
+    "noopener noreferrer nofollow",
+  );
   await page.locator(".text-body").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "e2e-screens/message-stress-text.png" });
   await fitsViewport(page, "stress message as plain text");
@@ -206,7 +236,10 @@ type NotifyApi = {
   newMailNote: () => Promise<Note>;
 };
 
-test("phone: the worker turns a new-mail ping into sender and subject, never a code @mobile", async ({ page, context }) => {
+test("phone: the worker turns a new-mail ping into sender and subject, never a code @mobile", async ({
+  page,
+  context,
+}) => {
   await page.goto("/#/inbox");
   await expect.poll(() => context.serviceWorkers().length).toBeGreaterThan(0);
   const worker = context.serviceWorkers()[0];
@@ -277,7 +310,9 @@ test("phone: a row's actions stay folded until it is engaged @mobile", async ({ 
   await expect(fold).toBeVisible();
 });
 
-test("phone: the More menu inside an engaged row still clears the tab bar @mobile", async ({ page }) => {
+test("phone: the More menu inside an engaged row still clears the tab bar @mobile", async ({
+  page,
+}) => {
   const row = await openAliases(page);
   await expect(row).toHaveCount(1);
   await row.locator(".entity-summary").click();

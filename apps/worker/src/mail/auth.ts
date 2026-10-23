@@ -1,13 +1,12 @@
 import { AuthVerdict } from "@mailvault/shared";
+import { getDomain } from "tldts";
 
 /**
  * Sender authentication assessment (SPF / DKIM / DMARC).
  *
- * A receiver cannot take `Authentication-Results` at face value: the header is part of
- * the message, so an attacker can write `spf=pass` themselves. A pass is therefore only
- * credited as *aligned* when the domain it vouches for is the header-From domain or a
- * parent of it — DMARC's own alignment rule. Anything else is recorded as evidence but
- * never treated as trust.
+ * MIME Authentication-Results are sender-controlled and are retained only as observations.
+ * Trust requires separate verified evidence; the Email Routing adapter currently has no
+ * documented verified-authentication result to provide.
  */
 
 export const AuthOutcome = {
@@ -22,41 +21,45 @@ export const AuthOutcome = {
 export type AuthOutcome = (typeof AuthOutcome)[keyof typeof AuthOutcome];
 
 export type AuthMechanism = "spf" | "dkim" | "dmarc";
+export type VerifiedAuthSource = "cryptographic-verifier" | "trusted-runtime-metadata";
 
 export interface AuthEvidence {
   mechanism: AuthMechanism;
   outcome: AuthOutcome;
-  /** Domain the result vouches for, as found in the header (`d=`, `header.i=`, `smtp.mailfrom=`). */
+  /** Domain the result vouches for or was verified against. */
   domain: string | null;
   aligned: boolean;
+  source: "message-header" | VerifiedAuthSource;
   /** Which `Authentication-Results` issuer reported it (e.g. `google.com`, `cloudflare.com`). */
   reporter: string | null;
 }
 
+/** Only an independently verified producer may supply this; raw MIME is never converted to it. */
+export interface VerifiedAuthEvidence {
+  mechanism: AuthMechanism;
+  outcome: AuthOutcome;
+  domain: string | null;
+  source: VerifiedAuthSource;
+}
+
 export interface AuthAssessment {
   verdict: AuthVerdict;
-  /** Raw outcomes as reported by the header — honest, but not necessarily aligned. */
+  /** Verified outcomes when available, otherwise outcomes reported by the header. */
   spf: AuthOutcome | null;
   dkim: AuthOutcome | null;
   dmarc: AuthOutcome | null;
-  /** Which of those passes actually vouch for the From domain. This is the trust signal. */
+  /** Verified passes that vouch for the From domain. */
   alignedPass: Record<AuthMechanism, boolean>;
   evidence: AuthEvidence[];
   /** Envelope MAIL FROM domain is unrelated to the header From domain. */
   envelopeMismatch: boolean;
-  /** No `Authentication-Results` header reached us at all — nothing to judge. */
+  /** No recognized authentication result was parsed. */
   observed: boolean;
   reasons: string[];
 }
 
 const OUTCOMES = new Set<string>(Object.values(AuthOutcome));
-
-/** Multi-part public suffixes that must not be cut in half by naive registrable-domain logic. */
-const KNOWN_MULTI_TLD = new Set([
-  "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp",
-  "ne.jp", "or.jp", "com.br", "com.vn", "net.vn", "org.vn", "co.in", "com.mx", "com.sg",
-  "com.hk", "com.tw", "co.kr", "com.my", "com.ph", "co.za", "com.tr", "com.ua", "com.ru",
-]);
+const VERIFIED_SOURCES = new Set<string>(["cryptographic-verifier", "trusted-runtime-metadata"]);
 
 export function bareDomain(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -70,11 +73,24 @@ export function bareDomain(value: string | null | undefined): string | null {
 
 export function registrableDomain(domain: string | null): string | null {
   if (!domain) return null;
-  const labels = domain.split(".").filter(Boolean);
-  if (labels.length <= 2) return domain;
-  const lastTwo = labels.slice(-2).join(".");
-  const cut = KNOWN_MULTI_TLD.has(lastTwo) ? 3 : 2;
-  return labels.slice(-cut).join(".");
+  const normalized = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^\.+|\.+$/g, "");
+  if (!normalized || !/^[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*$/u.test(normalized))
+    return null;
+  let asciiHostname: string;
+  try {
+    asciiHostname = new URL(`http://${normalized}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  return (
+    getDomain(asciiHostname, {
+      allowPrivateDomains: true,
+      validateHostname: true,
+    })?.toLowerCase() ?? null
+  );
 }
 
 /** `child` equals `parent` or sits underneath it — DMARC relaxed-style alignment. */
@@ -91,8 +107,14 @@ function domainLabel(raw: string): string {
   return (bareDomain(candidate) ?? candidate).toLowerCase();
 }
 
-function parseLine(line: string): { pss: string | null; pairs: Array<{ mech: string; outcome: AuthOutcome; value: string | null }> } {
-  const parts = line.split(";").map((p) => p.trim()).filter(Boolean);
+function parseLine(line: string): {
+  pss: string | null;
+  pairs: Array<{ mech: string; outcome: AuthOutcome; value: string | null }>;
+} {
+  const parts = line
+    .split(";")
+    .map((p) => p.trim())
+    .filter(Boolean);
   const pss = parts.length > 0 ? bareDomain(parts[0]) : null;
   const pairs: Array<{ mech: string; outcome: AuthOutcome; value: string | null }> = [];
   for (const segment of parts.slice(1)) {
@@ -106,7 +128,7 @@ function parseLine(line: string): { pss: string | null; pairs: Array<{ mech: str
     if (!OUTCOMES.has(outcome)) continue;
     let value: string | null = null;
     for (const token of tokens.slice(1)) {
-      if (/^(d|header\.i|header\.from|smtp\.mailfrom|dtcp|selector)=/i.test(token)) {
+      if (/^(d|header\.d|header\.i|header\.from|smtp\.mailfrom|dtcp|selector)=/i.test(token)) {
         value = token;
         break;
       }
@@ -123,15 +145,50 @@ function collect(authResults: string[], fromDomain: string | null): AuthEvidence
     for (const pair of pairs) {
       const vouched = pair.value ? domainLabel(pair.value) : pss;
       evidence.push({
-        mechanism: (["spf", "dkim", "dmarc"].includes(pair.mech) ? pair.mech : "dkim") as AuthMechanism,
+        mechanism: (["spf", "dkim", "dmarc"].includes(pair.mech)
+          ? pair.mech
+          : "dkim") as AuthMechanism,
         outcome: pair.outcome,
         domain: vouched || null,
-        aligned: !!vouched && !!fromDomain && domainsAlign(registrableDomain(vouched), registrableDomain(fromDomain)),
+        aligned:
+          !!vouched &&
+          !!fromDomain &&
+          domainsAlign(registrableDomain(vouched), registrableDomain(fromDomain)),
+        source: "message-header",
         reporter: pss,
       });
     }
   }
   return evidence;
+}
+
+function collectVerified(
+  evidence: VerifiedAuthEvidence[],
+  fromDomain: string | null,
+): AuthEvidence[] {
+  return evidence.flatMap((item) => {
+    if (
+      !item ||
+      !["spf", "dkim", "dmarc"].includes(item.mechanism) ||
+      !OUTCOMES.has(item.outcome) ||
+      !VERIFIED_SOURCES.has(item.source)
+    )
+      return [];
+    const domain = item.domain ? bareDomain(item.domain) : null;
+    return [
+      {
+        mechanism: item.mechanism,
+        outcome: item.outcome,
+        domain,
+        aligned:
+          !!domain &&
+          !!fromDomain &&
+          domainsAlign(registrableDomain(domain), registrableDomain(fromDomain)),
+        source: item.source,
+        reporter: null,
+      },
+    ];
+  });
 }
 
 const BETTER: Record<string, number> = {
@@ -144,7 +201,7 @@ const BETTER: Record<string, number> = {
   [AuthOutcome.Fail]: 0,
 };
 
-/** Aligned passes outrank everything; among the rest the most informative result wins. */
+/** Prefer the most informative result within an evidence source; trust is assessed separately. */
 function pick(list: AuthOutcome[]): AuthOutcome | null {
   if (list.length === 0) return null;
   const ranked = [...list].sort((a, b) => (BETTER[b] ?? 0) - (BETTER[a] ?? 0));
@@ -155,39 +212,52 @@ export function assessAuth(input: {
   authResults: string[];
   headerFrom: string | null;
   envelopeFrom: string | null;
+  /** Independent verifier output only; this must never be populated from MIME headers. */
+  verifiedEvidence?: VerifiedAuthEvidence[];
 }): AuthAssessment {
   const fromDomain = bareDomain(input.headerFrom);
   const envelopeDomain = bareDomain(input.envelopeFrom);
-  const evidence = collect(input.authResults, fromDomain);
-  const found: Record<AuthMechanism, AuthOutcome[]> = { spf: [], dkim: [], dmarc: [] };
+  const headerEvidence = collect(input.authResults, fromDomain);
+  const verifiedEvidence = collectVerified(input.verifiedEvidence ?? [], fromDomain);
+  const evidence = [...headerEvidence, ...verifiedEvidence];
   const alignedPass: Record<AuthMechanism, boolean> = { spf: false, dkim: false, dmarc: false };
 
-  for (const item of evidence) {
-    found[item.mechanism].push(item.outcome);
+  for (const item of verifiedEvidence) {
     if (item.outcome === AuthOutcome.Pass && item.aligned) alignedPass[item.mechanism] = true;
   }
 
-  const result: Record<AuthMechanism, AuthOutcome | null> = {
-    spf: pick(found.spf),
-    dkim: pick(found.dkim),
-    dmarc: pick(found.dmarc),
-  };
-  if (alignedPass.spf) result.spf = AuthOutcome.Pass;
-  if (alignedPass.dkim) result.dkim = AuthOutcome.Pass;
-  if (alignedPass.dmarc) result.dmarc = AuthOutcome.Pass;
+  const result = {} as Record<AuthMechanism, AuthOutcome | null>;
+  for (const mechanism of ["spf", "dkim", "dmarc"] as const) {
+    const verified = verifiedEvidence.filter((item) => item.mechanism === mechanism);
+    const observed = headerEvidence.filter((item) => item.mechanism === mechanism);
+    result[mechanism] = pick(
+      (verified.length > 0 ? verified : observed).map((item) => item.outcome),
+    );
+    if (alignedPass[mechanism]) result[mechanism] = AuthOutcome.Pass;
+  }
 
-  const envelopeMismatch = !!fromDomain && !!envelopeDomain
-    ? registrableDomain(fromDomain) !== registrableDomain(envelopeDomain)
-    : false;
+  const envelopeMismatch =
+    !!fromDomain && !!envelopeDomain
+      ? registrableDomain(fromDomain) !== registrableDomain(envelopeDomain)
+      : false;
 
   const reasons: string[] = [];
   let verdict: AuthVerdict = AuthVerdict.Unverified;
-  if (result.dmarc === AuthOutcome.Fail) {
+  const trustedDmarcFailure = verifiedEvidence.some(
+    (item) => item.mechanism === "dmarc" && item.outcome === AuthOutcome.Fail && item.aligned,
+  );
+  if (trustedDmarcFailure) {
     verdict = AuthVerdict.Spoofed;
     reasons.push("dmarc=fail");
   }
   if (!alignedPass.dmarc && !alignedPass.dkim && !alignedPass.spf) {
-    if (verdict !== AuthVerdict.Spoofed) reasons.push("không có kết quả pass nào aligned với domain người gửi");
+    if (verdict !== AuthVerdict.Spoofed) {
+      reasons.push(
+        headerEvidence.length > 0
+          ? "kết quả xác thực chỉ đến từ header do người gửi cung cấp"
+          : "không có kết quả xác thực đã được xác minh",
+      );
+    }
   } else if (verdict !== AuthVerdict.Spoofed) {
     verdict = AuthVerdict.Trusted;
     if (alignedPass.dmarc) reasons.push("dmarc pass, aligned");
