@@ -89,7 +89,13 @@ function fakePushDb(rows: FakePushRow[]) {
       };
       return api;
     },
-    batch: async () => ({ results: [] }),
+    // A batch executes its statements like the real binding does — the parallel sweep
+    // writes its updates and deletions through here.
+    batch: async (stmts: { run: () => Promise<Record<string, unknown>> }[]) => {
+      const out: Record<string, unknown>[] = [];
+      for (const stmt of stmts) out.push(await stmt.run());
+      return out;
+    },
   };
   return { db: db as unknown as D1Database, writes };
 }

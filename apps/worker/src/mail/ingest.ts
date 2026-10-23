@@ -7,7 +7,7 @@ import { findActiveAliasByAddress } from "../db/aliases";
 import { getDomainById } from "../db/domains";
 import { fileByRule, listEnabledRules, recordRuleHits } from "../db/rules";
 import { applyRules, NO_RULES, type AppliedRules } from "./rules";
-import { insertMessage, insertAttachments, dedupeKeyExists, indexMessage, findThreadRoot } from "../db/messages";
+import { insertMessageWithDependents, dedupeKeyExists, findThreadRoot } from "../db/messages";
 import type { InsertMessageInput, InsertAttachmentInput } from "../db/messages";
 import {
   buildRawKey,
@@ -236,21 +236,25 @@ export async function stageEmail(
   const attachmentRows: InsertAttachmentInput[] = [];
   try {
     await putRaw(bucket, rawKey, bytes);
-    for (const a of parsedAttachments) {
-      const attId = newId();
-      const safe = sanitizeFilename(a.filename);
-      const key = buildAttachmentKey(messageId, attId, safe);
-      await putAttachment(bucket, key, a.bytes, a.contentType);
-      writtenKeys.push(key);
-      attachmentRows.push({
-        filename: a.filename,
-        safeFilename: safe,
-        contentType: a.contentType,
-        size: a.bytes.byteLength,
-        r2Key: key,
-        contentId: a.contentId,
-      });
-    }
+    // Independent objects, written together: one message with many files should not pay
+    // a round trip per file.
+    await Promise.all(
+      parsedAttachments.map(async (a) => {
+        const attId = newId();
+        const safe = sanitizeFilename(a.filename);
+        const key = buildAttachmentKey(messageId, attId, safe);
+        await putAttachment(bucket, key, a.bytes, a.contentType);
+        writtenKeys.push(key);
+        attachmentRows.push({
+          filename: a.filename,
+          safeFilename: safe,
+          contentType: a.contentType,
+          size: a.bytes.byteLength,
+          r2Key: key,
+          contentId: a.contentId,
+        });
+      }),
+    );
     // The staged object is what the commit reads back, so it holds everything the
     // metadata row needs — including the headers the verdict was judged from.
     const staged: StagedParse = {
@@ -354,7 +358,14 @@ export async function commitIngest(job: IngestJob, db: D1Database, bucket: R2Buc
     auth,
   };
 
-  const insertedId = await insertMessage(db, insert);
+  // One batch: the message, its attachment rows and its search entry land together, so a
+  // crash between them can no longer leave a stored message that search cannot find.
+  const insertedId = await insertMessageWithDependents(
+    db,
+    insert,
+    staged.attachments,
+    { subject: staged.subject, preview, sender: staged.from },
+  );
   if (insertedId === null) {
     // Lost a dedupe race with a concurrent delivery of the same event; the objects we
     // staged for our own (never written) message id are ours to remove.
@@ -362,8 +373,6 @@ export async function commitIngest(job: IngestJob, db: D1Database, bucket: R2Buc
     log.info("mail_duplicate_race", { aliasId: job.aliasId });
     return { status: "duplicate" };
   }
-  await insertAttachments(db, insertedId, staged.attachments);
-  await indexMessage(db, insertedId, { subject: staged.subject, preview, sender: staged.from });
 
   // Rules run after the row exists: filing mail is organisation, and a rule that throws
   // must never cost the owner a message that already arrived.

@@ -51,9 +51,14 @@ export interface RecipientWrite {
 }
 
 /** Atomic upsert that refuses to move a destination backwards. */
-async function writeRecipient(db: D1Database, messageId: string, r: RecipientWrite): Promise<void> {
+export function writeRecipientStatement(
+  db: D1Database,
+  messageId: string,
+  r: RecipientWrite,
+  existingList: "to" | "cc" | "bcc",
+): D1PreparedStatement {
   const at = nowIso();
-  await db
+  return db
     .prepare(
       `INSERT INTO message_recipients (id, message_id, address, list, status, rank, smtp_code, detail, updated_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
@@ -70,14 +75,18 @@ async function writeRecipient(db: D1Database, messageId: string, r: RecipientWri
       newId(),
       messageId,
       r.address.toLowerCase(),
-      r.list,
+      existingList,
       r.status,
       rankOf(r.status),
       r.smtpCode ?? null,
       r.detail ? r.detail.slice(0, 500) : null,
       at,
-    )
-    .run();
+    );
+}
+
+/** Kept for callers that apply one event at a time; the batch consumer builds statements directly. */
+async function writeRecipient(db: D1Database, messageId: string, r: RecipientWrite, existingList: "to" | "cc" | "bcc"): Promise<void> {
+  await writeRecipientStatement(db, messageId, r, existingList).run();
 }
 
 /**
@@ -143,13 +152,7 @@ export async function applyDeliveryEvent(
     .first<{ list: "to" | "cc" | "bcc" }>();
   // An address that reports in without having been recorded is still a destination of this
   // message — the send may predate per-recipient tracking, so the event creates its row.
-  await writeRecipient(db, messageId, {
-    address: event.recipient,
-    list: existing?.list ?? "to",
-    status: event.status,
-    smtpCode: event.smtpCode,
-    detail: event.detail,
-  });
+  await writeRecipient(db, messageId, { address: event.recipient, list: "to", status: event.status, smtpCode: event.smtpCode, detail: event.detail }, existing?.list ?? "to");
   await refreshSendStatus(db, messageId);
 }
 
@@ -177,6 +180,31 @@ export async function refreshSendStatus(db: D1Database, messageId: string): Prom
   const status = aggregateStatus(rows.map((r) => r.status as SendStatus));
   await db.prepare(`UPDATE messages SET send_status = ?2 WHERE id = ?1`).bind(messageId, status).run();
   return status;
+}
+
+/**
+ * The same recompute for a whole delivery batch: one read for every destination, one
+ * UPDATE per affected message, applied together. The per-event path above is what a
+ * single caller uses; the queue consumer should never pay it twenty times over.
+ */
+export async function refreshSendStatuses(db: D1Database, ids: string[]): Promise<void> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return;
+  const placeholders = unique.map((_, i) => `?${i + 1}`).join(", ");
+  const { results } = await db
+    .prepare(`SELECT message_id, status FROM message_recipients WHERE message_id IN (${placeholders})`)
+    .bind(...unique)
+    .all<{ message_id: string; status: string }>();
+  const byMessage = new Map<string, string[]>();
+  for (const r of results ?? []) {
+    const list = byMessage.get(r.message_id) ?? [];
+    list.push(r.status);
+    byMessage.set(r.message_id, list);
+  }
+  const stmts = [...byMessage.entries()].map(([id, statuses]) =>
+    db.prepare(`UPDATE messages SET send_status = ?2 WHERE id = ?1`).bind(id, aggregateStatus(statuses as SendStatus[])),
+  );
+  if (stmts.length > 0) await db.batch(stmts);
 }
 
 export async function listRecipients(db: D1Database, messageId: string): Promise<MessageRecipient[]> {
