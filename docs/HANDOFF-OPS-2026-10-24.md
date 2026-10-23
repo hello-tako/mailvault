@@ -51,12 +51,19 @@
 
    ✅ *chụp màn hình danh sách 2 secret (GitHub chỉ hiện tên, không hiện giá trị — an toàn để chụp).*
 
-### 1c. Kiểm tra ngay (không cần đợi merge)
+### 1c. Kiểm tra ngay trên máy (không cần đợi merge)
 
-1. Trong repo → tab **Actions** → workflow **"Backup D1"** bên trái → **Run workflow** → Branch chọn `redesign/full-interface` → **Run workflow**.
-2. Đợi ~2–4 phút, mở run vừa tạo, cả 4 bước phải ✅ xanh (Ensure bucket / Export D1 / Upload to R2 / Prune).
-3. Kiểm chứng dữ liệu thật: Cloudflare dashboard → **R2 Object Storage** → bucket **`mail-vault-backups`** → thư mục `d1/` → thấy file `mailvault-<ngày>.sql` dung lượng > 0. ✅
-4. Nếu run đỏ: mở log bước đỏ, chụp lại. Lỗi hay gặp: `Authentication error [code 10000]` = thiếu/thiếu đúng permission ở bước 1a.5 — sửa bằng cách tạo lại token với đúng bảng trên (token cũ cứ để, tạo mới rồi update secret).
+Workflow "Backup D1" chưa tồn tại trên GitHub (nó nằm trong các commit chưa push), mà GitHub chỉ cho chạy thủ công workflow đã có trên default branch — nên **đừng** tìm nó trong tab Actions lúc này. Kiểm chứng token bằng script read-only có sẵn trong repo, chạy trên máy chủ sở hữu:
+
+```bash
+cd ~/Documents/mail\ sever
+CF_API_TOKEN=<token vừa tạo> ./scripts/ops/check-ci-token.sh
+```
+
+Kết quả đúng: 5 dòng `OK ...` (Workers Scripts / D1 / Queues / R2 storage / R2 backups) rồi dòng `token has every scope CI needs`. ✅ *chụp output.*
+
+- Nếu một dòng `FAIL` kèm lỗi `Authentication error [code 10000]`: permission tương ứng thiếu/sai ở bước 1a.5 — tạo lại token đúng bảng (token cũ để nguyên), update secret, chạy lại script.
+- Kiểm chứng dữ liệu thật (file backup nằm trong bucket) chỉ làm được **sau khi Việc 3 merge xong**, bằng cách chạy workflow "Backup D1" thủ công như mô tả ở mục 3c.
 
 ---
 
@@ -73,7 +80,18 @@
 
 Lưu ý: các bản phiên bản cũ cũng chiếm dung lượng R2 (rất nhỏ ở quy mô cá nhân; R2 miễn phí 10 GB). Không cần cấu hình gì thêm — từ giờ mọi lần ghi đè/xóa đều tự giữ bản cũ.
 
-### 2b. Đặt uptime monitor (UptimeRobot, gói free)
+### 2b. Mở `/api/health` qua Access (bắt buộc làm TRƯỚC monitor)
+
+App nằm sau Cloudflare Access trên mọi path, nên monitor ngoài sẽ nhận 302 về trang đăng nhập chứ không bao giờ thấy 200. Bypass đúng 1 path duy nhất, đúng như SECURITY.md đã tuyên bố ("coarse liveness, public"):
+
+1. Dashboard Cloudflare → **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**.
+2. Tên: `MailVault health (public)`. Application domain 1: `mail.tungjp.store`, path `/api/health`. Application domain 2: `mail.omnipos.tech`, path `/api/health`.
+3. Policy duy nhất: Name `bypass-health`, Action **Bypass**, Include **Everyone**. (Access khớp application cụ thể nhất trước, nên chỉ 2 path này public — mọi path khác vẫn giữ đăng nhập.)
+4. Kiểm chứng bằng trình duyệt ẩn danh: `https://mail.tungjp.store/api/health` phải trả JSON `"ok":true`, không còn 302. Nếu vẫn 302: đợi ~1 phút rồi thử lại. ✅ *chụp cả 2 màn hình.*
+
+### 2c. Đặt uptime monitor (UptimeRobot, gói free)
+
+**Chỉ làm sau khi 2b trả JSON `"ok":true` trong trình duyệt ẩn danh** — nếu không monitor sẽ báo Down ngay từ phút đầu.
 
 1. Vào **https://uptimerobot.com** → Sign up bằng email tuỳ chọn (tạo tài khoản riêng cho ops cũng được) → xác nhận email.
 2. Bấm **Add New Monitor**, điền:
@@ -95,12 +113,14 @@ Lưu ý: các bản phiên bản cũ cũng chiếm dung lượng R2 (rất nhỏ
 
 ### 3a. Push branch
 
+⚠️ **Bối cảnh đã thay đổi so với bản hướng dẫn trước:** main trên GitHub từng rẽ nhánh (chứa security work mà branch này không có). Đã xử lý xong trên máy — branch hiện tại **đã merge toàn bộ origin/main vào** (commit đầu lịch sử là `877c4aa Merge origin/main: …`), conflict đã giải, migrations đã đánh số lại (0020/0021), và bộ test gộp (467 worker + 116 web + 59 E2E) chạy xanh trên chính máy này. Vì vậy PR sẽ **không còn conflict**.
+
 Trên máy chủ sở hữu (Mac), Terminal:
 
 ```bash
 cd ~/Documents/mail\ sever
 git status          # phải sạch: "nothing to commit, working tree clean"
-git log --oneline -3   # thấy: "Type the alert test's captured send through unknown" trên cùng
+git log --oneline -2   # thấy: "877c4aa Merge origin/main: …" trên cùng
 git push origin redesign/full-interface
 ```
 
