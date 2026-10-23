@@ -83,7 +83,11 @@
         "queue": "mail-delivery-events",
         "max_batch_size": 20,
         "max_batch_timeout": 5,
-        "max_retries": 3
+        "max_retries": 3,
+        // A persistent database failure must not end with delivery events silently
+        // disappearing after their retry budget — they park here, recoverable, exactly
+        // like ingest jobs do. Created 2026-10-24 alongside mail-ingest-dlq.
+        "dead_letter_queue": "mail-delivery-events-dlq"
       }
     ]
   },
