@@ -97,7 +97,7 @@ describe("recordOpsFailure", () => {
     for (let i = 0; i < 3; i++) await recordOpsFailure(env, "ingest-commit", `boom ${i}`);
 
     expect(send).toHaveBeenCalledTimes(1);
-    const call = send.mock.calls[0]![0] as { from: string; to: string[]; subject: string; replyTo?: string };
+    const call = send.mock.calls[0]![0] as unknown as { from: string; to: string[]; subject: string; text: string; replyTo?: string };
     expect(call.from).toBe("ops@send.omnipos.tech"); // sends through the domain's own sending name
     expect(call.replyTo).toBe("ops@omnipos.tech"); // answers come back to the alias
     expect(call.to).toEqual(["tungbipdz@gmail.com"]);
