@@ -790,3 +790,18 @@ pipeline, the streak count, the last error, and points here. If sending itself i
 configured, the alert degrades to an `ops_alert` metric (`outcome: skipped`) in the
 `mailvault-events` dataset rather than disappearing silently.
 
+### The automation around it (added 2026-10-24)
+
+- **Deploy**: the `deploy` job in `ci.yml` now runs on every merge to `main` (still
+  manually dispatchable), applies D1 migrations, then ships what `verify` built. The
+  `production` environment can be given reviewers in GitHub settings to require an
+  approval per deploy instead.
+- **Smoke**: `.github/workflows/smoke.yml` checks the live `/api/health` and the portal
+  hostname's 404 shape from outside Cloudflare, nightly.
+- **Dependencies**: `.github/dependabot.yml` raises weekly grouped PRs for npm and
+  actions.
+- **The hand-built resources**: `scripts/ops/` holds idempotent scripts for the two
+  resources a deploy cannot create — the `email.sending` queue subscription per zone and
+  the portal hostname's DNS + service route. Rebuilding from scratch is now a run of
+  that folder plus the runbooks above, not a re-reading of this document.
+

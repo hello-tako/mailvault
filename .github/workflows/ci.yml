@@ -1,8 +1,10 @@
 name: CI
 
 # `verify` is the gate: it runs the same commands the README claims are green. `deploy`
-# is manual-only and ships exactly what `verify` built, so a deploy can never publish
-# source nobody tested.
+# ships exactly what `verify` built — on merge to main automatically (CI already proved
+# it, and migrations are applied in the job before the code lands), or by manual dispatch
+# when the owner wants a hand on the wheel. The `production` environment can still be
+# given reviewers in GitHub settings to turn auto-deploy back into an approval.
 
 on:
   push:
@@ -71,7 +73,9 @@ jobs:
 
   deploy:
     needs: verify
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     environment: production
     steps:

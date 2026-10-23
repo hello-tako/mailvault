@@ -1,0 +1,39 @@
+name: Smoke production
+
+# The outside view of the app, once a night. Everything inside Cloudflare can be green
+# while the Worker is not answering, and the hourly watchdog only checks mail routing —
+# this is the check that notices "the app itself is down" from where a owner would.
+
+on:
+  schedule:
+    - cron: "23 4 * * *" # 04:23 UTC daily, between the backup run and the morning
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The app answers and says it is healthy
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS --max-time 30 https://mail.tungjp.store/api/health)
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
+
+      - name: The portal hostname answers only its one job
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://code.tungjp.store/)
+          echo "portal root: $code"
+          [ "$code" = "404" ]
+
+      - name: A portal-shaped link is refused without its token
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://code.tungjp.store/c/not-a-token)
+          echo "portal bogus token: $code"
+          [ "$code" = "404" ] || [ "$code" = "410" ]
