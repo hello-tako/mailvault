@@ -760,9 +760,21 @@ by hand from this machine.
 1. **Enable R2 Object Versioning**: dashboard → R2 → `mail-vault-storage` → Settings →
    Object Versioning → Enable. (No wrangler command exists for it as of wrangler 4.152,
    and this account's OAuth login cannot reach the R2 config API.)
-2. **Uptime watch**: point a free external monitor (UptimeRobot, Better Stack) at
-   `https://mail.tungjp.store/api/health`. Everything inside Cloudflare can be green while
-   the Worker is not answering; this is the only check that notices from outside.
+2. **Uptime watch** (two steps, because the app sits behind Access):
+   a. **Publish `/api/health` past Access.** Zero Trust → Access → Applications →
+      *Add an application* → Self-hosted, name it `MailVault health (public)`, with two
+      application domains: `mail.tungjp.store/api/health` and
+      `mail.omnipos.tech/api/health`, and exactly one policy: action **Bypass**,
+      include **Everyone**. Access routes the most specific application first, so the
+      health path becomes public while every other path keeps its login — matching what
+      the app itself already intends (the route is never gated in code and answers only
+      `ok/version/time` plus coarse `d1/r2/token` status words). Verify from a private
+      browser window: `https://mail.tungjp.store/api/health` must return JSON with
+      `"ok":true`, not a 302 to the Access login.
+   b. **Point a free external monitor** (UptimeRobot, Better Stack) at
+      `https://mail.tungjp.store/api/health`, 5-minute interval, email alerts. Everything
+      inside Cloudflare can be green while the Worker is not answering; this is the only
+      check that notices from outside.
 
 ### Restore runbooks
 

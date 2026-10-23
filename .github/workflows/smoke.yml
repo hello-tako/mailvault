@@ -2,7 +2,13 @@ name: Smoke production
 
 # The outside view of the app, once a night. Everything inside Cloudflare can be green
 # while the Worker is not answering, and the hourly watchdog only checks mail routing —
-# this is the check that notices "the app itself is down" from where a owner would.
+# this is the check that notices "the app itself is down" from where an owner would.
+#
+# /api/health is deliberately public at the application layer (SECURITY.md: "coarse
+# liveness"). At the edge it sits behind the Access application, so these checks need the
+# one-time Access bypass application for /api/health described in DEPLOYMENT.md — without
+# it the health check fails with a 302 and says exactly that, rather than quietly
+# reporting every night as down.
 
 on:
   schedule:
@@ -20,9 +26,14 @@ jobs:
       - name: The app answers and says it is healthy
         run: |
           set -euo pipefail
-          body=$(curl -fsS --max-time 30 https://mail.tungjp.store/api/health)
-          echo "$body"
-          echo "$body" | grep -q '"ok":true'
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 30 https://mail.tungjp.store/api/health)
+          if [ "$code" = "302" ] || [ "$code" = "403" ]; then
+            echo "::error::/api/health answered $code from Access — the bypass application for the health path (DEPLOYMENT.md, \"Uptime watch\") is not in place."
+            exit 1
+          fi
+          [ "$code" = "200" ] || { echo "::error::unexpected status $code"; exit 1; }
+          cat /tmp/health.json
+          grep -q '"ok":true' /tmp/health.json
 
       - name: The portal hostname answers only its one job
         run: |
