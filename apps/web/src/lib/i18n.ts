@@ -653,6 +653,12 @@ export const en: Dict = {
   "search.op.before": "before",
   "search.chipRemove": "Remove this filter",
 
+  "msg.downloadEml": "Download original (.eml)",
+  "aliases.export": "Export",
+  "aliases.import": "Import",
+  "aliases.importEmpty": "That file holds no aliases",
+  "aliases.importReport": "Added {created} · already here {skipped} · refused {invalid}",
+
   "send.status.DEFERRED": "The other server is retrying",
   "send.status.REJECTED": "Refused",
   "send.status.COMPLAINED": "Reported as spam",
@@ -1286,6 +1292,12 @@ export const vi: Dict = {
   "search.op.after": "sau",
   "search.op.before": "trước",
   "search.chipRemove": "Bỏ bộ lọc này",
+
+  "msg.downloadEml": "Tải bản gốc (.eml)",
+  "aliases.export": "Xuất file",
+  "aliases.import": "Nhập file",
+  "aliases.importEmpty": "File này không chứa bí danh nào",
+  "aliases.importReport": "Đã thêm {created} · đã có sẵn {skipped} · bị từ chối {invalid}",
 
   "send.status.DEFERRED": "Máy chủ kia đang thử lại",
   "send.status.REJECTED": "Bị từ chối",

@@ -1,6 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api";
-import { attachmentHref } from "../lib/api";
+import { api, attachmentHref, rawMessageHref } from "../lib/api";
 import { Link, navigate } from "../lib/router";
 import { useAsync } from "../lib/useAsync";
 import { useOutbox } from "../lib/useOutbox";
@@ -210,6 +209,12 @@ export function MessageDetail({
                 label={t("common.more")}
                 items={[
                   { label: t(data.starred ? "msg.unstar" : "msg.star"), onSelect: () => void toggleStar() },
+                  {
+                    label: t("msg.downloadEml"),
+                    onSelect: () => {
+                      window.location.href = rawMessageHref(data.id);
+                    },
+                  },
                   { label: t("msg.delete"), onSelect: () => setConfirmDelete(true), danger: true },
                 ]}
               />

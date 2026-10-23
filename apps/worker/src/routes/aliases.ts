@@ -5,9 +5,12 @@ import {
   CreateAliasSchema,
   CreatePortalLinkSchema,
   DeleteAliasSchema,
+  ImportAliasesInputSchema,
   LocalPartMode,
+  MailStatus,
   UpdateAliasSchema,
   isValidLocalPart,
+  type ImportAliasesResult,
 } from "@mailvault/shared";
 import type { AppEnv } from "../app-env";
 import {
@@ -20,12 +23,13 @@ import {
   setAliasStatus,
   updateAlias,
 } from "../db/aliases";
-import { getDomainById } from "../db/domains";
+import { getDomainById, listDomains } from "../db/domains";
 import { createGrant, listGrants, revokeGrant } from "../db/portal";
 import { conflict, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
 import { portalOrigin, portalPath } from "../portal/link";
-import { randomLocalPart } from "../lib/util";
+import { randomLocalPart, nowIso } from "../lib/util";
+import { normalizeLookupAddress, splitAddress } from "../mail/normalize";
 import { deleteKeys } from "../storage/r2";
 import { actorOf, parseQuery, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
@@ -56,6 +60,68 @@ export const aliasesRoute = new Hono<AppEnv>()
   .get("/api/aliases", async (c) => {
     const { q, view } = parseQuery(c, ListQuery);
     return c.json({ items: await listAliases(c.env.DB, q, view) });
+  })
+
+  /**
+   * The whole address book as a file — for moving to a fresh install, or keeping beside the
+   * weekly D1 export. Registered above `/:id` for the same reason `counters` is on messages:
+   * registration order decides which route an "export" path reaches.
+   */
+  .get("/api/aliases/export", async (c) => {
+    const aliases = await listAliases(c.env.DB, undefined, "all");
+    const rows = aliases.map((a) => ({ address: a.address, label: a.label, notes: a.notes }));
+    return new Response(JSON.stringify({ exportedAt: nowIso(), aliases: rows }, null, 2), {
+      headers: {
+        "content-type": "application/json",
+        "content-disposition": `attachment; filename="mailvault-aliases-${nowIso().slice(0, 10)}.json"`,
+        "cache-control": "private, no-store",
+      },
+    });
+  })
+
+  /**
+   * Add back what an export wrote. Additive by construction: an address that already exists
+   * is counted and left alone, and one whose domain this mailbox cannot receive on is
+   * reported rather than half-created.
+   */
+  .post("/api/aliases/import", async (c) => {
+    const { aliases } = await readJson(c, ImportAliasesInputSchema);
+    const domains = await listDomains(c.env.DB);
+    const byName = new Map(domains.map((d) => [d.name.toLowerCase(), d]));
+
+    let created = 0;
+    let skipped = 0;
+    const invalid: string[] = [];
+    for (const row of aliases) {
+      const address = normalizeLookupAddress(row.address);
+      const parts = splitAddress(address);
+      const domainName = address.split("@")[1] ?? "";
+      const domain = byName.get(domainName);
+      if (!address || !parts.valid || !domain || domain.mailStatus !== MailStatus.Ready) {
+        invalid.push(row.address);
+        continue;
+      }
+      if (await aliasExists(c.env.DB, domain.id, parts.local)) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const made = await createAlias(c.env.DB, {
+          domainId: domain.id,
+          domainName: domain.name,
+          localPart: parts.local,
+          label: row.label ?? null,
+        });
+        if (row.notes) await updateAlias(c.env.DB, made.id, { notes: row.notes });
+        created += 1;
+      } catch {
+        // A row the database refused (a reserved name, a clash that raced us) is a report
+        // line, not a reason to abandon the rest of the file.
+        invalid.push(row.address);
+      }
+    }
+    log.info("aliases_imported", { actor: actorOf(c).email, created, skipped, invalid: invalid.length });
+    return c.json({ created, skipped, invalid } satisfies ImportAliasesResult);
   })
 
   /** One alias with its arrival history — counts, span and the senders that use it. */

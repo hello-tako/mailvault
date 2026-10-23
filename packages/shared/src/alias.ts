@@ -192,6 +192,31 @@ export type AliasStats = z.infer<typeof AliasStatsSchema>;
 export const AliasDetailSchema = z.object({ alias: AliasSchema, stats: AliasStatsSchema });
 export type AliasDetail = z.infer<typeof AliasDetailSchema>;
 
+/**
+ * One row of an aliases export, and everything an import may add: the address, a label,
+ * and the note that says where it was used. Status, pinning and archive state are
+ * deliberately absent — an import decides what exists, not how the owner has arranged it.
+ */
+export const AliasExportRowSchema = z.object({
+  address: z.string().min(3).max(254),
+  label: z.string().max(LABEL_MAX_LENGTH).nullable().optional(),
+  notes: z.string().max(NOTES_MAX_LENGTH).nullable().optional(),
+});
+export type AliasExportRow = z.infer<typeof AliasExportRowSchema>;
+
+export const ImportAliasesInputSchema = z.object({
+  aliases: z.array(AliasExportRowSchema).min(1).max(500),
+});
+export type ImportAliasesInput = z.infer<typeof ImportAliasesInputSchema>;
+
+/** What an import did, so the screen can say exactly what happened rather than "done". */
+export const ImportAliasesResultSchema = z.object({
+  created: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  invalid: z.array(z.string()).default([]),
+});
+export type ImportAliasesResult = z.infer<typeof ImportAliasesResultSchema>;
+
 /** DELETE /api/aliases/:id — `purgeMessages` also removes its stored mail. */
 export const DeleteAliasSchema = z.object({
   purgeMessages: z.boolean().default(false),

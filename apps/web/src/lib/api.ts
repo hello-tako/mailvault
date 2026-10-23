@@ -28,6 +28,8 @@ import type {
   RuleMatch,
   RecipientSuggestion,
   ReplyInput,
+  ImportAliasesInput,
+  ImportAliasesResult,
   SendOutcome,
   SendingPreview,
   UpdateAliasInput,
@@ -139,6 +141,9 @@ export const api = {
   updateAlias: (id: string, patch: UpdateAliasInput) =>
     request<Alias>(`/aliases/${encodeURIComponent(id)}`, mutation(patch, "PATCH")),
   createAlias: (input: CreateAliasInput) => request<Alias>("/aliases", mutation(input)),
+  /** Add back what an export wrote — additive only, and the answer says exactly what landed. */
+  importAliases: (input: ImportAliasesInput) =>
+    request<ImportAliasesResult>("/aliases/import", mutation(input)),
   enableAlias: (id: string) => request<Alias>(`/aliases/${encodeURIComponent(id)}/enable`, mutation()),
   disableAlias: (id: string) => request<Alias>(`/aliases/${encodeURIComponent(id)}/disable`, mutation()),
   deleteAlias: (id: string, purgeMessages: boolean) =>
@@ -278,3 +283,11 @@ export interface SemanticStatus {
 export function attachmentHref(messageId: string, attachmentId: string): string {
   return `${BASE}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
 }
+
+/** The original .eml as it arrived — same authenticated download path as attachments. */
+export function rawMessageHref(id: string): string {
+  return `${BASE}/messages/${encodeURIComponent(id)}/raw`;
+}
+
+/** The address book as a file; a navigation, not a fetch, so the browser saves it. */
+export const ALIASES_EXPORT_HREF = `${BASE}/aliases/export`;

@@ -207,6 +207,34 @@ export const messagesRoute = new Hono<AppEnv>()
   })
 
   /**
+   * The original bytes exactly as they arrived — for archiving a message outside the
+   * vault, or moving it to another mail system. The stored raw object is the source the
+   * parsed view was derived from, so what downloads is what was delivered, not a rebuild.
+   */
+  .get("/api/messages/:id/raw", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const row = await getMessageRow(c.env.DB, id);
+    if (!row) throw notFound("Message not found");
+    const obj = await getObject(c.env.MAIL_BUCKET, row.raw_r2_key);
+    if (!obj) throw notFound("The original message is no longer in storage");
+    const base =
+      (row.subject ?? "message")
+        .normalize("NFKD")
+        .replace(/[^\w\s.-]+/g, "")
+        .trim()
+        .slice(0, 60) || "message";
+    return new Response(obj.body, {
+      headers: {
+        "content-type": "message/rfc822",
+        "content-disposition": `attachment; filename="${base}.eml"`,
+        "content-length": String(obj.size),
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      },
+    });
+  })
+
+  /**
    * Authenticated attachment download (section 20/43). Ownership is enforced by the
    * message+attachment FK lookup; the object streams from the private bucket with a
    * safe filename and forced `attachment` disposition so nothing inlines/executes.

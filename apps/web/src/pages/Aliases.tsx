@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, ApiClientError } from "../lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiClientError, ALIASES_EXPORT_HREF } from "../lib/api";
 import {
   LocalPartMode,
   MailStatus,
@@ -8,6 +8,7 @@ import {
   type Alias,
   type CreateAliasInput,
   type Domain,
+  type ImportAliasesInput,
   type UpdateAliasInput,
 } from "@mailvault/shared";
 import { navigate } from "../lib/router";
@@ -174,10 +175,25 @@ export function Aliases({ openNew }: { openNew: boolean }) {
   const [purge, setPurge] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const folded = useOpenRow();
+  const importFile = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (openNew) setShowNew(true);
   }, [openNew]);
+
+  /** Accepts what Export writes (`{aliases: [...]}`) or a bare array of the same rows. */
+  async function importFromFile(file: File) {
+    try {
+      const parsed = JSON.parse(await file.text()) as { aliases?: unknown } | unknown[];
+      const rows = Array.isArray(parsed) ? parsed : parsed.aliases;
+      if (!Array.isArray(rows) || rows.length === 0) throw new Error(t("aliases.importEmpty"));
+      const result = await api.importAliases({ aliases: rows as ImportAliasesInput["aliases"] });
+      setNotice(t("aliases.importReport", { created: result.created, skipped: result.skipped, invalid: result.invalid.length }));
+      reload();
+    } catch (e) {
+      setNotice(e instanceof ApiClientError || e instanceof Error ? e.message : t("common.updateFail"));
+    }
+  }
 
   async function toggleStatus(a: Alias) {
     if (a.status === "ACTIVE") await api.disableAlias(a.id);
@@ -214,6 +230,24 @@ export function Aliases({ openNew }: { openNew: boolean }) {
       <div className="page-head">
         <h1>{t("aliases.title")}</h1>
         <div className="actions">
+          <button className="small ghost" onClick={() => (window.location.href = ALIASES_EXPORT_HREF)}>
+            {t("aliases.export")}
+          </button>
+          <button className="small ghost" onClick={() => importFile.current?.click()}>
+            {t("aliases.import")}
+          </button>
+          {/* Hidden until chosen: an import is a file pick, not a text field. */}
+          <input
+            ref={importFile}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void importFromFile(file);
+            }}
+          />
           <button className="primary" onClick={() => setShowNew(true)}>
             {t("dash.newAlias")}
           </button>
