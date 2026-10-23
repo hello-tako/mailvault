@@ -32,13 +32,13 @@ import { requireIrreversibleStepUp, STEP_UP_HEADER } from "../security/irreversi
 export { STEP_UP_HEADER } from "../security/irreversible";
 
 const CredentialResponse = z.object({
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
   challenge: z.string().min(1),
   deviceLabel: z.string().max(120).optional(),
 });
 
 const AssertionResponse = z.object({
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
   challenge: z.string().min(1),
 });
 

@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { z } from "zod";
 import type { ZodTypeAny, output } from "zod";
 import { CloudflareApiError, createCloudflareClient, type CloudflareClient } from "../cf/api-client";
 import type { Env } from "../env";
@@ -17,7 +18,7 @@ export async function readJson<T extends ZodTypeAny>(c: Ctx, schema: T): Promise
   }
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
-    throw badRequest("Validation failed", parsed.error.flatten().fieldErrors);
+    throw badRequest("Validation failed", z.flattenError(parsed.error).fieldErrors);
   }
   return parsed.data as output<T>;
 }
@@ -27,7 +28,7 @@ export function parseQuery<T extends ZodTypeAny>(c: Ctx, schema: T): output<T> {
   const q = c.req.query();
   const parsed = schema.safeParse(q);
   if (!parsed.success) {
-    throw badRequest("Invalid query", parsed.error.flatten().fieldErrors);
+    throw badRequest("Invalid query", z.flattenError(parsed.error).fieldErrors);
   }
   return parsed.data as output<T>;
 }
