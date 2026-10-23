@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { attachmentHref } from "../lib/api";
 import { Link, navigate } from "../lib/router";
@@ -11,12 +11,14 @@ import { t } from "../lib/i18n";
 import { MessageHtml } from "../components/MessageHtml";
 import { TextBody } from "../components/TextBody";
 import { ConfirmDialog, ErrorBanner, Loading, Menu } from "../components/ui";
-import { Composer } from "../components/Composer";
 import { AuthBanner, AuthDetail, CodeCard, LinkCard, sortCodes, sortLinks } from "../components/mail/MailInsights";
 import { Fold } from "../components/mail/Fold";
 import { DeliveryReport } from "../components/mail/DeliveryReport";
 import { UnsubscribeCard, parseUnsubscribe } from "../components/mail/UnsubscribeCard";
 import { AuthVerdict, BulkMessageAction, MessageDirection } from "@mailvault/shared";
+
+// The editor is needed only when a reply starts; the reader should not carry it.
+const Composer = lazy(() => import("../components/Composer").then((m) => ({ default: m.Composer })));
 
 /**
  * One message, read.
@@ -81,17 +83,21 @@ export function MessageDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Opening a message marks it read once per id; ignore failures silently.
+  // Opening a message marks it read once per id; the row's flag moves locally rather than
+  // refetching the whole message — the list's badges answer to its own counters call.
+  const [readLocal, setReadLocal] = useState<boolean | null>(null);
+  const isRead = readLocal ?? data?.isRead ?? false;
+  useEffect(() => {
+    setReadLocal(null);
+  }, [id]);
   useEffect(() => {
     if (!data || data.isRead || markedRef.current === data.id) return;
     markedRef.current = data.id;
-    void api
-      .setMessageRead(data.id, true)
-      .then(reload)
-      .catch(() => {
-        /* non-critical */
-      });
-  }, [data, reload]);
+    setReadLocal(true);
+    void api.setMessageRead(data.id, true).catch(() => {
+      /* non-critical */
+    });
+  }, [data]);
 
   const codes = useMemo(() => sortCodes(data?.extractedCodes ?? []), [data]);
   const links = useMemo(() => sortLinks(data?.verificationLinks ?? []), [data]);
@@ -109,14 +115,14 @@ export function MessageDetail({
 
   async function toggleRead() {
     if (!data) return;
-    const next = !data.isRead;
+    const next = !isRead;
     // In the pane, reading something is also a request to be shown the next one.
     if (next && onRead) {
       onRead(data.id);
       return;
     }
+    setReadLocal(next);
     await api.setMessageRead(data.id, next).catch(() => undefined);
-    reload();
   }
 
   async function toggleStar() {
@@ -197,7 +203,7 @@ export function MessageDetail({
                 {t("msg.reply")}
               </button>
               <button className="small" onClick={toggleRead}>
-                {t(data.isRead ? "msg.markUnread" : "msg.markRead")}
+                {t(isRead ? "msg.markUnread" : "msg.markRead")}
               </button>
               <Menu
                 small
@@ -404,21 +410,23 @@ export function MessageDetail({
       ) : null}
 
       {replying ? (
-        <Composer
-          replyTo={data}
-          sendableAliases={outbox.aliases}
-          remaining={outbox.capabilities?.remaining ?? 0}
-          bindingMissing={outbox.capabilities?.bindingMissing}
-          onClose={() => setReplying(false)}
-          onSent={() => {
-            setReplying(false);
-            reload();
-            reloadThread();
-            // The day's budget moved with the send, and the composer shows it.
-            outbox.reload();
-            setNotice(t("msg.replySent"));
-          }}
-        />
+        <Suspense fallback={null}>
+          <Composer
+            replyTo={data}
+            sendableAliases={outbox.aliases}
+            remaining={outbox.capabilities?.remaining ?? 0}
+            bindingMissing={outbox.capabilities?.bindingMissing}
+            onClose={() => setReplying(false)}
+            onSent={() => {
+              setReplying(false);
+              reload();
+              reloadThread();
+              // The day's budget moved with the send, and the composer shows it.
+              outbox.reload();
+              setNotice(t("msg.replySent"));
+            }}
+          />
+        </Suspense>
       ) : null}
 
       {confirmDelete && (

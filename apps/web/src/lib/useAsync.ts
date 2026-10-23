@@ -10,8 +10,21 @@ export interface AsyncState<T> {
   reload: () => void;
 }
 
+export interface UseAsyncOptions {
+  /**
+   * Whether a new-mail nudge refetches this hook. The nudge says "the list changed", so it
+   * belongs to the inbox list and the badges beside it — a page full of hooks all
+   * refetching on every arrival was the tab telling itself the same news twice.
+   */
+  live?: boolean;
+}
+
 /** Minimal loader keyed by `deps`. `run` must be stable (wrap in useCallback). */
-export function useAsync<T>(run: () => Promise<T>, deps: readonly unknown[]): AsyncState<T> {
+export function useAsync<T>(
+  run: () => Promise<T>,
+  deps: readonly unknown[],
+  opts: UseAsyncOptions = {},
+): AsyncState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,13 +38,13 @@ export function useAsync<T>(run: () => Promise<T>, deps: readonly unknown[]): As
     };
   }, []);
 
-  // A new-mail nudge refetches through the same authenticated route the manual Refresh
-  // button uses — the socket carries no data, so there is nothing to patch in place.
   useEffect(() => {
-    const onNewMail = () => setNonce((n) => n + 1);
-    window.addEventListener(NEW_MAIL_EVENT, onNewMail);
-    return () => window.removeEventListener(NEW_MAIL_EVENT, onNewMail);
-  }, []);
+    if (opts.live === true) {
+      const onNewMail = () => setNonce((n) => n + 1);
+      window.addEventListener(NEW_MAIL_EVENT, onNewMail);
+      return () => window.removeEventListener(NEW_MAIL_EVENT, onNewMail);
+    }
+  }, [opts.live]);
 
   useEffect(() => {
     let cancelled = false;
