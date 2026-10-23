@@ -9,7 +9,7 @@ import type {
   SendStatus,
   VerificationLink,
 } from "@mailvault/shared";
-import { MessageDirection, parseSearchQuery, type Count, type MessageCounters } from "@mailvault/shared";
+import { MessageDirection, parseSearchQuery, type MessageCounters } from "@mailvault/shared";
 import { newId, nowIso } from "../lib/util";
 import { listRecipients } from "./recipients";
 import { parseJson, toMessageAuth, toMessageSummary } from "./mappers";
@@ -23,10 +23,16 @@ import type { AttachmentRow, MessageRow } from "./rows";
  * `direction` is optional here because an internal caller naming no direction means the
  * inbox, which is also what the API schema defaults to; the two must not disagree.
  */
-export type ListInput = Omit<MessageListQuery, "direction" | "threaded"> & {
+export type ListInput = Omit<MessageListQuery, "direction" | "threaded" | "before"> & {
   direction?: MessageListQuery["direction"];
   threaded?: boolean;
   semanticIds?: string[];
+  /**
+   * Keyset cursor (`receivedAt|id` of the last row already shown). Only honoured for the
+   * plain list: a search ranks rows and a threaded view partitions them, and in both a
+   * "below this row" predicate would silently mean something else.
+   */
+  before?: { receivedAt: string; id: string };
 };
 
 export interface InsertMessageInput {
@@ -81,13 +87,16 @@ function changes(res: { meta?: unknown }): number {
   return Number((res.meta as { changes?: number } | undefined)?.changes ?? 0);
 }
 
-/** Returns the new message id, or null when the dedupe_key already existed. */
-export async function insertMessage(db: D1Database, m: InsertMessageInput): Promise<string | null> {
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Error && /UNIQUE constraint failed: messages.dedupe_key/i.test(err.message);
+}
+
+/** The insert plus the id it will insert, so callers can batch it with rows that name that id. */
+function insertMessageStatement(db: D1Database, m: InsertMessageInput): [D1PreparedStatement, string] {
   const id = newId();
-  try {
-    await db
-      .prepare(
-        `INSERT INTO messages (
+  const stmt = db
+    .prepare(
+      `INSERT INTO messages (
           id, domain_id, alias_id, provider_message_id, dedupe_key,
           envelope_from, envelope_to, header_from, header_to, subject, preview,
           received_at, raw_size, raw_r2_key, parsed_r2_key, has_attachments,
@@ -99,52 +108,81 @@ export async function insertMessage(db: D1Database, m: InsertMessageInput): Prom
           ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
           ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33
         )`,
-      )
-      .bind(
-        id,
-        m.domainId,
-        m.aliasId,
-        m.providerMessageId,
-        m.dedupeKey,
-        m.envelopeFrom,
-        m.envelopeTo,
-        m.headerFrom,
-        m.headerTo,
-        m.subject,
-        m.preview,
-        m.receivedAt,
-        m.rawSize,
-        m.rawR2Key,
-        m.parsedR2Key,
-        m.hasAttachments ? 1 : 0,
-        m.attachmentCount,
-        // Sent mail is written as read: the owner just composed it.
-        m.direction === MessageDirection.Out ? 1 : 0,
-        JSON.stringify(m.codes),
-        JSON.stringify(m.links),
-        m.authVerdict,
-        m.auth ? JSON.stringify(m.auth) : null,
-        nowIso(),
-        m.direction ?? MessageDirection.In,
-        // A message that starts a conversation is that conversation. Filled in by the
-        // caller when the thread is known, and back-filled below when it is not.
-        m.threadRootId ?? id,
-        m.inReplyTo ?? null,
-        m.references && m.references.length > 0 ? JSON.stringify(m.references) : null,
-        m.replyTo ?? null,
-        m.cc ?? null,
-        m.sendStatus ?? null,
-        m.sendError ?? null,
-        m.listUnsubscribe ?? null,
-        // The header is stored as a flag rather than its text: the only value it may hold is
-        // the one that means one-click, so a stored copy of the sender's wording adds nothing.
-        m.oneClickUnsubscribe ? "List-Unsubscribe=One-Click" : null,
-      )
-      .run();
+    )
+    .bind(
+      id,
+      m.domainId,
+      m.aliasId,
+      m.providerMessageId,
+      m.dedupeKey,
+      m.envelopeFrom,
+      m.envelopeTo,
+      m.headerFrom,
+      m.headerTo,
+      m.subject,
+      m.preview,
+      m.receivedAt,
+      m.rawSize,
+      m.rawR2Key,
+      m.parsedR2Key,
+      m.hasAttachments ? 1 : 0,
+      m.attachmentCount,
+      // Sent mail is written as read: the owner just composed it.
+      m.direction === MessageDirection.Out ? 1 : 0,
+      JSON.stringify(m.codes),
+      JSON.stringify(m.links),
+      m.authVerdict,
+      m.auth ? JSON.stringify(m.auth) : null,
+      nowIso(),
+      m.direction ?? MessageDirection.In,
+      // A message that starts a conversation is that conversation. Filled in by the
+      // caller when the thread is known, and back-filled below when it is not.
+      m.threadRootId ?? id,
+      m.inReplyTo ?? null,
+      m.references && m.references.length > 0 ? JSON.stringify(m.references) : null,
+      m.replyTo ?? null,
+      m.cc ?? null,
+      m.sendStatus ?? null,
+      m.sendError ?? null,
+      m.listUnsubscribe ?? null,
+      // The header is stored as a flag rather than its text: the only value it may hold is
+      // the one that means one-click, so a stored copy of the sender's wording adds nothing.
+      m.oneClickUnsubscribe ? "List-Unsubscribe=One-Click" : null,
+    );
+  return [stmt, id];
+}
+
+/** Returns the new message id, or null when the dedupe_key already existed. */
+export async function insertMessage(db: D1Database, m: InsertMessageInput): Promise<string | null> {
+  const [stmt, id] = insertMessageStatement(db, m);
+  try {
+    await stmt.run();
+    correspondentsCache = null;
     return id;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/UNIQUE constraint failed: messages.dedupe_key/i.test(msg)) return null;
+    if (isUniqueViolation(err)) return null;
+    throw err;
+  }
+}
+
+/**
+ * The whole commit in one batch: message row, attachment rows and FTS entry land
+ * atomically, so a failure between them can no longer leave a message without its files
+ * or its search entry. Dedupe behaves exactly like `insertMessage`.
+ */
+export async function insertMessageWithDependents(
+  db: D1Database,
+  m: InsertMessageInput,
+  attachments: InsertAttachmentInput[],
+  ftsText: { subject: string | null; preview: string | null; sender: string | null },
+): Promise<string | null> {
+  const [stmt, id] = insertMessageStatement(db, m);
+  try {
+    await db.batch([stmt, ...attachmentStatements(db, id, attachments), ...indexStatements(db, id, ftsText)]);
+    correspondentsCache = null;
+    return id;
+  } catch (err) {
+    if (isUniqueViolation(err)) return null;
     throw err;
   }
 }
@@ -208,17 +246,25 @@ export async function countSentSince(db: D1Database, sinceIso: string): Promise<
  * Keep the search index in step with a message. Delete-then-insert so a redelivered or
  * re-indexed message cannot leave duplicate index rows behind.
  */
+export function indexStatements(
+  db: D1Database,
+  messageId: string,
+  text: { subject: string | null; preview: string | null; sender: string | null },
+): D1PreparedStatement[] {
+  return [
+    db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(messageId),
+    db
+      .prepare(`INSERT INTO messages_fts (message_id, subject, preview, sender) VALUES (?1,?2,?3,?4)`)
+      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
+  ];
+}
+
 export async function indexMessage(
   db: D1Database,
   messageId: string,
   text: { subject: string | null; preview: string | null; sender: string | null },
 ): Promise<void> {
-  await db.batch([
-    db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(messageId),
-    db
-      .prepare(`INSERT INTO messages_fts (message_id, subject, preview, sender) VALUES (?1,?2,?3,?4)`)
-      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
-  ]);
+  await db.batch(indexStatements(db, messageId, text));
 }
 
 export async function dedupeKeyExists(db: D1Database, dedupeKey: string): Promise<boolean> {
@@ -229,14 +275,13 @@ export async function dedupeKeyExists(db: D1Database, dedupeKey: string): Promis
   return !!row;
 }
 
-export async function insertAttachments(
+export function attachmentStatements(
   db: D1Database,
   messageId: string,
   attachments: InsertAttachmentInput[],
-): Promise<void> {
-  if (attachments.length === 0) return;
+): D1PreparedStatement[] {
   const now = nowIso();
-  const stmts = attachments.map((a) =>
+  return attachments.map((a) =>
     db
       .prepare(
         `INSERT INTO attachments (id, message_id, filename, safe_filename, content_type, size, r2_key, content_id, created_at)
@@ -244,7 +289,15 @@ export async function insertAttachments(
       )
       .bind(a.id ?? newId(), messageId, a.filename, a.safeFilename, a.contentType, a.size, a.r2Key, a.contentId, now),
   );
-  await db.batch(stmts);
+}
+
+export async function insertAttachments(
+  db: D1Database,
+  messageId: string,
+  attachments: InsertAttachmentInput[],
+): Promise<void> {
+  if (attachments.length === 0) return;
+  await db.batch(attachmentStatements(db, messageId, attachments));
 }
 
 /**
@@ -317,8 +370,7 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
   }
 
   let rank = "0";
-  if (intent.text) {
-    // Text comes from the FTS index; codes and alias text from LIKE, so searching an
+  if (intent.text) {    // Text comes from the FTS index; codes and alias text from LIKE, so searching an
     // address or an OTP still finds mail stored before the index existed. A query with no
     // usable words produces an empty MATCH, which FTS5 rejects — so the index is only
     // consulted when there is something to look for in it.
@@ -344,6 +396,16 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
       terms.push(`m.id IN (${placeholders})`);
     }
     clauses.push(`(${terms.join(" OR ")})`);
+  }
+
+  // Keyset pagination for the plain list: rows strictly below the cursor in list order.
+  // Guarded against search/threaded views here rather than at the caller, because the
+  // guard is exactly "would `received_at DESC, id DESC` still be the whole ordering".
+  if (query.before && !intent.text && !query.threaded) {
+    const at = push(query.before.receivedAt);
+    const atAgain = push(query.before.receivedAt);
+    const id = push(query.before.id);
+    clauses.push(`(m.received_at < ?${at} OR (m.received_at = ?${atAgain} AND m.id < ?${id}))`);
   }
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params, rank };
 }
@@ -408,9 +470,12 @@ export async function listMessages(
     .prepare(`SELECT COUNT(*) AS c ${SELECT_LIST} ${where}`)
     .bind(...params)
     .first<{ c: number }>();
+  // The cursor page needs no OFFSET: the WHERE clause already starts it below the last
+  // row of the previous page, so LIMIT alone is the whole page boundary.
+  const paging = query.before && rank === "0" ? "" : ` OFFSET ?${limitAt + 1}`;
   const { results } = await db
-    .prepare(`SELECT * FROM (${inner}) ORDER BY ${order} LIMIT ?${limitAt} OFFSET ?${limitAt + 1}`)
-    .bind(...params, query.limit, query.offset)
+    .prepare(`SELECT * FROM (${inner}) ORDER BY ${order} LIMIT ?${limitAt}${paging}`)
+    .bind(...(query.before && rank === "0" ? [...params, query.limit] : [...params, query.limit, query.offset]))
     .all<MessageRow>();
   return { items: (results ?? []).map(toMessageSummary), total: Number(countRow?.c ?? 0) };
 }
@@ -419,11 +484,18 @@ export async function listMessages(
  * Addresses this mailbox has actually exchanged mail with, newest first — the composer's
  * autocomplete. Both directions count: having written to somebody is a stronger signal than
  * having received from them, which is what `outgoing` is for.
+ *
+ * The unfiltered call (composer opening) is cached briefly in the isolate: it unions two
+ * whole-table scans, mail changes it only by adding a correspondent, and any write in this
+ * file drops the cache anyway.
  */
-export async function listCorrespondents(
+let correspondentsCache: { at: number; rows: Awaited<ReturnType<typeof queryCorrespondents>> } | null = null;
+const CORRESPONDENTS_TTL_MS = 120_000;
+
+async function queryCorrespondents(
   db: D1Database,
   q: string | undefined,
-  limit = 8,
+  limit: number,
 ): Promise<{ address: string; name: string | null; lastSeen: string; outgoing: boolean }[]> {
   const like = q ? `%${q.toLowerCase()}%` : "%";
   const { results } = await db
@@ -458,6 +530,21 @@ export async function listCorrespondents(
     // A sent message records its recipients as one header, so a row naming several of them is
     // not a single address and cannot be suggested as one.
     .filter((r) => r.address.includes("@") && !r.address.includes(","));
+}
+
+export async function listCorrespondents(
+  db: D1Database,
+  q: string | undefined,
+  limit = 8,
+): Promise<{ address: string; name: string | null; lastSeen: string; outgoing: boolean }[]> {
+  if (!q) {
+    const hit = correspondentsCache && Date.now() - correspondentsCache.at < CORRESPONDENTS_TTL_MS ? correspondentsCache : null;
+    if (hit) return hit.rows.slice(0, Math.min(Math.max(limit, 1), 25));
+    const rows = await queryCorrespondents(db, undefined, 25);
+    correspondentsCache = { at: Date.now(), rows };
+    return rows.slice(0, Math.min(Math.max(limit, 1), 25));
+  }
+  return queryCorrespondents(db, q, limit);
 }
 
 /** `"Name <a@b>"` → `Name`; a bare address has no display name. */
@@ -496,16 +583,21 @@ export async function getMessageAttachments(db: D1Database, messageId: string): 
   }));
 }
 
-export async function getMessageDetail(db: D1Database, id: string): Promise<MessageDetail | null> {
+export async function getMessageDetail(
+  db: D1Database,
+  id: string,
+): Promise<(MessageDetail & { parsedR2Key: string | null }) | null> {
   const row = await getMessageRow(db, id);
   if (!row) return null;
   const summary = toMessageSummary(row);
-  const attachments = await getMessageAttachments(db, id);
+  // Two independent reads of one message: asking for them together halves the latency
+  // between "opened" and "readable" without changing what either returns.
+  const [attachments, recipients] = await Promise.all([getMessageAttachments(db, id), listRecipients(db, id)]);
   return {
     ...summary,
     // Only the detail view pays for this: the list badge shows the message-level summary,
     // which is a column rather than a join.
-    recipients: await listRecipients(db, id),
+    recipients,
     appliedRuleNote: row.applied_rule_note ?? null,
     providerMessageId: row.provider_message_id,
     rawSize: Number(row.raw_size),
@@ -522,6 +614,7 @@ export async function getMessageDetail(db: D1Database, id: string): Promise<Mess
     sendError: row.send_error ?? null,
     listUnsubscribe: row.list_unsubscribe ?? null,
     oneClickUnsubscribe: row.list_unsubscribe_post != null,
+    parsedR2Key: row.parsed_r2_key ?? null,
   };
 }
 
@@ -580,6 +673,7 @@ export async function deleteMessages(db: D1Database, ids: string[]): Promise<{ r
     db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).bind(...ids),
     db.prepare(`DELETE FROM messages_fts WHERE message_id IN (${placeholders})`).bind(...ids),
   ]);
+  correspondentsCache = null;
   return { removed: rows.length, keys: [...keys] };
 }
 
@@ -591,42 +685,42 @@ export async function deleteMessages(db: D1Database, ids: string[]): Promise<{ r
  * lie the moment anything is filtered.
  */
 export async function messageCounters(db: D1Database, domainId?: string): Promise<MessageCounters> {
+  // Eight small counts in one batch, each an index seek on its tab's filter, instead of
+  // one aggregate that reads every row of the mailbox: a badge should not have to walk
+  // the whole table to know its number, and COUNT with a WHERE is a shape SQLite
+  // reliably serves from an index.
+  const scope = domainId ? " AND domain_id = ?1" : "";
   const bind = domainId ? [domainId] : [];
-  const totals = await db
-    .prepare(
-      `SELECT
-         SUM(CASE WHEN direction = 'IN' AND archived = 0 THEN 1 ELSE 0 END) AS inbox_total,
-         SUM(CASE WHEN direction = 'IN' AND archived = 0 AND is_read = 0 THEN 1 ELSE 0 END) AS inbox_unread,
-         SUM(CASE WHEN direction = 'OUT' THEN 1 ELSE 0 END) AS sent_total,
-         SUM(CASE WHEN direction = 'OUT' AND is_read = 0 THEN 1 ELSE 0 END) AS sent_unread,
-         SUM(CASE WHEN starred = 1 THEN 1 ELSE 0 END) AS starred_total,
-         SUM(CASE WHEN starred = 1 AND is_read = 0 THEN 1 ELSE 0 END) AS starred_unread,
-         SUM(CASE WHEN archived = 1 THEN 1 ELSE 0 END) AS filed_total,
-         SUM(CASE WHEN archived = 1 AND is_read = 0 THEN 1 ELSE 0 END) AS filed_unread
-       FROM messages
-       WHERE 1 = 1 ${domainId ? "AND domain_id = ?1" : ""}`,
-    )
-    .bind(...bind)
-    .first<Record<string, number | null>>();
-  const perMailbox = await db
-    .prepare(
-      `SELECT domain_id, COUNT(*) AS unread FROM messages
-       WHERE direction = 'IN' AND archived = 0 AND is_read = 0 ${domainId ? "AND domain_id = ?1" : ""}
-       GROUP BY domain_id`,
-    )
-    .bind(...(domainId ? [domainId] : []))
-    .all<{ domain_id: string; unread: number }>();
+  const count = (where: string) => db.prepare(`SELECT COUNT(*) AS c FROM messages WHERE ${where}${scope}`).bind(...bind);
+  const [inboxTotal, inboxUnread, sentTotal, sentUnread, starredTotal, starredUnread, filedTotal, filedUnread, perMailbox] =
+    await db.batch([
+      count(`direction = 'IN' AND archived = 0`),
+      count(`direction = 'IN' AND archived = 0 AND is_read = 0`),
+      count(`direction = 'OUT'`),
+      count(`direction = 'OUT' AND is_read = 0`),
+      count(`starred = 1`),
+      count(`starred = 1 AND is_read = 0`),
+      count(`archived = 1`),
+      count(`archived = 1 AND is_read = 0`),
+      db
+        .prepare(
+          `SELECT domain_id, COUNT(*) AS unread FROM messages
+           WHERE direction = 'IN' AND archived = 0 AND is_read = 0${scope}
+           GROUP BY domain_id`,
+        )
+        .bind(...bind),
+    ]);
+  const of = (r: unknown): number => Number((r as { results?: { c?: number }[] } | undefined)?.results?.[0]?.c ?? 0);
 
-  const count = (total: string, unread: string): Count => ({
-    total: Number(totals?.[total] ?? 0),
-    unread: Number(totals?.[unread] ?? 0),
-  });
   return {
-    inbox: count("inbox_total", "inbox_unread"),
-    sent: count("sent_total", "sent_unread"),
-    starred: count("starred_total", "starred_unread"),
-    filed: count("filed_total", "filed_unread"),
-    mailboxes: (perMailbox.results ?? []).map((r) => ({ domainId: r.domain_id, unread: Number(r.unread) })),
+    inbox: { total: of(inboxTotal), unread: of(inboxUnread) },
+    sent: { total: of(sentTotal), unread: of(sentUnread) },
+    starred: { total: of(starredTotal), unread: of(starredUnread) },
+    filed: { total: of(filedTotal), unread: of(filedUnread) },
+    mailboxes: ((perMailbox as { results?: { domain_id: string; unread: number }[] })?.results ?? []).map((r) => ({
+      domainId: r.domain_id,
+      unread: Number(r.unread),
+    })),
   };
 }
 
@@ -655,6 +749,7 @@ export async function deleteMessage(db: D1Database, id: string): Promise<string[
     db.prepare(`DELETE FROM messages WHERE id = ?1`).bind(id),
     db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(id),
   ]);
+  correspondentsCache = null;
   return changes(res as { meta?: unknown }) === 0 ? [] : keys;
 }
 
