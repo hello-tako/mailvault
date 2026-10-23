@@ -35,7 +35,10 @@ async function openMintForm(page: Page) {
 
 test("makes a link, shows it once, then never shows its secret again", async ({ page }) => {
   const form = await openMintForm(page);
-  await form.getByLabel("Note for this link").fill("order 77");
+  // Local dev state survives between runs; a per-run note keeps this test from matching
+  // the links earlier runs minted. CI resets D1 per run, where this stays unique too.
+  const note = `order 77 ${Date.now()}`;
+  await form.getByLabel("Note for this link").fill(note);
   await form.getByLabel("Looks allowed").fill("3");
   await form.getByRole("button", { name: "Create link" }).click();
 
@@ -47,7 +50,7 @@ test("makes a link, shows it once, then never shows its secret again", async ({ 
   await dialog.getByLabel("Close").click();
 
   // The row knows how the link is doing; it cannot know the link.
-  const row = page.locator(".entity").filter({ hasText: "order 77" });
+  const row = page.locator(".entity").filter({ hasText: note });
   await expect(row.getByText("Live")).toBeVisible();
   await expect(row.getByText("0 of 3 looks used")).toBeVisible();
 

@@ -513,6 +513,7 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
                 onClose={() => openMessage(null)}
                 onOpenMessage={openMessage}
                 onRead={(id) => void markRead(id, true, true)}
+                onDeleted={reload}
               />
             </Suspense>
           </div>

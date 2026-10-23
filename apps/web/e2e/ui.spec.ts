@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
+import { openFold, resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
 
 /*
  * Layout contract for the phone build. These assert the things that silently break a
@@ -171,8 +171,7 @@ test("phone: a folded magic link, a tracking wrapper and an ASCII table all read
   page,
 }) => {
   await page.goto(`/#/messages/${STRESS_MSG}`);
-  // The merged reader shows the links as a section, not a fold; the cards are the same.
-  await expect(page.getByRole("heading", { name: "Verification links" })).toBeVisible();
+  await openFold(page, "Verification links");
   const cards = page.locator(".link-card");
   await expect(cards).toHaveCount(4);
 

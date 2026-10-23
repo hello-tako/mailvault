@@ -80,9 +80,9 @@ test("phone: a message view keeps its Vietnamese chrome @mobile", async ({ page 
   await useLanguage(page, "vi");
   await page.goto(`/#/messages/${SEEDED_UNREAD[0]}`);
   await expect(page.getByRole("link", { name: "← Hộp thư" })).toBeVisible();
-  // The merged reader answers and deletes with plain buttons rather than a menu.
-  await expect(page.getByRole("button", { name: "Trả lời" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Xoá", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Nội dung", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Khác" }).click();
+  await expect(page.getByRole("menuitem", { name: "Xoá", exact: true })).toBeVisible();
   await fitsViewport(page, "vi message");
 });
 

@@ -74,7 +74,10 @@ test("desktop: real WebAuthn gates deletion and last-passkey removal", async ({
       r.request().method() === "DELETE" &&
       Boolean(r.request().headers()["x-mailvault-stepup"]),
   );
-  await page.locator(".mail-pane").getByRole("button", { name: "Delete", exact: true }).click();
+  // The redesign folds the destructive actions into the pane's More menu; the security
+  // contract under test is the step-up gating, not where the button sits.
+  await page.locator(".mail-pane").getByRole("button", { name: "More" }).click();
+  await page.locator(".mail-pane").getByRole("menuitem", { name: "Delete", exact: true }).click();
   await page
     .getByRole("dialog", { name: "Delete message" })
     .getByRole("button", { name: "Delete permanently" })
