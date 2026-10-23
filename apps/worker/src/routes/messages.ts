@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { z } from "zod";
 import {
   BulkMessageAction,
@@ -33,6 +34,26 @@ import { actorOf, parseQuery, readJson } from "./_helpers";
 
 const IdParam = z.object({ id: z.string().min(1) });
 const AttachmentParam = z.object({ messageId: z.string().min(1), attachmentId: z.string().min(1) });
+
+/** Run after the response leaves: waitUntil in the Workers runtime, fire-and-forget under tests. */
+function detach(c: Context<AppEnv>, work: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(work);
+  } catch {
+    void work;
+  }
+}
+
+/** `receivedAt|id` → the pair, or undefined when the client sent something unusable. */
+function parseCursor(raw: string | undefined): { receivedAt: string; id: string } | undefined {
+  if (!raw) return undefined;
+  const idx = raw.lastIndexOf("|");
+  if (idx <= 0) return undefined;
+  const receivedAt = raw.slice(0, idx);
+  const id = raw.slice(idx + 1);
+  if (!id || Number.isNaN(Date.parse(receivedAt))) return undefined;
+  return { receivedAt, id };
+}
 
 /**
  * Which column each bulk flag action moves, and to what. `delete` is absent because it is
@@ -73,8 +94,13 @@ export const messagesRoute = new Hono<AppEnv>()
     // ask for semantic ids directly.
     const semanticIds =
       query.q && (await semanticEnabled(c.env.DB)) ? await searchMessageIds(c.env, query.q) : [];
-    const { items, total } = await listMessages(c.env.DB, { ...query, semanticIds });
-    return c.json(paginated(items, { limit: query.limit, offset: query.offset, total }));
+    const { items, total } = await listMessages(c.env.DB, { ...query, semanticIds, before: parseCursor(query.before) });
+    // A cursor the client can follow exists only for the plain list — a search reorders
+    // rows by rank and a threaded view partitions them, so there they page by offset.
+    const last = items[items.length - 1];
+    const nextCursor =
+      !query.q && !query.threaded && last && items.length === query.limit ? `${last.receivedAt}|${last.id}` : null;
+    return c.json({ ...paginated(items, { limit: query.limit, offset: query.offset, total }), nextCursor });
   })
 
   /**
@@ -104,8 +130,10 @@ export const messagesRoute = new Hono<AppEnv>()
     if (action === BulkMessageAction.Delete) {
       const { removed, keys } = await deleteMessages(c.env.DB, ids);
       const purged = await deleteKeys(c.env.MAIL_BUCKET, keys);
-      // Embeddings are copies of content the owner just deleted; they go with it.
-      for (const id of ids) await removeIndex(c.env, id);
+      // Embeddings are copies of content the owner just deleted; they go with it — but
+      // detached, because up to 200 Vectorize calls must not hold the response that
+      // already says the mail is gone.
+      detach(c, Promise.allSettled(ids.map((id) => removeIndex(c.env, id))));
       log.info("messages_bulk_deleted", { actor: actorOf(c).email, count: removed, r2Attempted: purged.attempted });
       return c.json({
         action,
@@ -130,16 +158,15 @@ export const messagesRoute = new Hono<AppEnv>()
     const detail = await getMessageDetail(c.env.DB, id);
     if (!detail) throw notFound("Message not found");
 
-    const row = await getMessageRow(c.env.DB, id);
-    const parsed = await readParsed(c.env.MAIL_BUCKET, row?.parsed_r2_key ?? null);
+    const { parsedR2Key, ...body } = detail;
+    const parsed = await readParsed(c.env.MAIL_BUCKET, parsedR2Key);
     const allowRemote = ["1", "true"].includes((c.req.query("remoteImages") ?? "").toLowerCase());
 
     return c.json({
-      ...detail,
+      ...body,
       textBody: parsed?.text ?? null,
       htmlBody: parsed?.html ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote }) : null,
-      parseDegraded: detail.parseDegraded || parsed?.degraded === true,
-      appliedRuleNote: row?.applied_rule_note ?? null,
+      parseDegraded: body.parseDegraded || parsed?.degraded === true,
     });
   })
 

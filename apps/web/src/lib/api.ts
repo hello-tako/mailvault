@@ -159,7 +159,7 @@ export const api = {
     ),
 
   listMessages: (query: Partial<MessageListQuery>) =>
-    request<Paginated<MessageSummary>>(`/messages${qs({ ...query })}`),
+    request<Paginated<MessageSummary> & { nextCursor: string | null }>(`/messages${qs({ ...query })}`),
   /** One conversation: received and sent rows interleaved, oldest first. */
   thread: (id: string) => request<{ id: string; items: MessageSummary[] }>(`/threads/${encodeURIComponent(id)}`),
   getMessage: (id: string, remoteImages = false) =>

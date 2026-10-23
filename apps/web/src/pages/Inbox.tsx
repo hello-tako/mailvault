@@ -31,6 +31,11 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<View>("all");
+  // Paging is two modes over one pair of states. The plain list pages by keyset cursor
+  // (each entry remembers where its page starts and how many rows came before it, so
+  // "Newer" pops and the from/to line stays honest); a search or a threaded view ranks
+  // and partitions rows, so those keep offset pages exactly as before.
+  const [pages, setPages] = useState<{ cursor: string | null; shown: number }[]>([{ cursor: null, shown: 0 }]);
   const [offset, setOffset] = useState(0);
   const [composing, setComposing] = useState(false);
   // Conversation view is the way a mailbox reads; a search opts out, because matching one
@@ -43,9 +48,21 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   const wide = useMediaQuery("(min-width: 900px)");
   const openId = wide ? route.get("open") : null;
 
+  const cursorMode = !search && !grouped;
+  const page = pages[pages.length - 1]!;
+
   const query = useMemo(
-    () => queryFor(view, { q: search, aliasId, domainId, offset, limit: PAGE, threaded: grouped && !search }),
-    [view, search, aliasId, domainId, offset, grouped],
+    () =>
+      queryFor(view, {
+        q: search,
+        aliasId,
+        domainId,
+        offset: cursorMode ? 0 : offset,
+        before: cursorMode ? (page.cursor ?? undefined) : undefined,
+        limit: PAGE,
+        threaded: grouped && !search,
+      }),
+    [view, search, aliasId, domainId, offset, grouped, cursorMode, page.cursor],
   );
 
   const { data, error, loading, reload } = useAsync(() => api.listMessages(query), [query]);
@@ -66,6 +83,7 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
 
   useEffect(() => {
     setOffset(0);
+    setPages([{ cursor: null, shown: 0 }]);
   }, [view, search, aliasId, domainId]);
 
   const items = data?.items ?? [];
@@ -242,8 +260,8 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   }, [openId]);
 
   const total = data?.total ?? 0;
-  const hasPrev = offset > 0;
-  const hasNext = data ? offset + PAGE < total : false;
+  const hasPrev = cursorMode ? pages.length > 1 : offset > 0;
+  const hasNext = cursorMode ? !!data?.nextCursor : data ? offset + PAGE < total : false;
 
   const scope = aliasId || domainId || search || view !== "all";
   // Inside one mailbox every row arrived at the same domain, so repeating it would be
@@ -310,13 +328,31 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
           </div>
           <div className="pager">
             <span className="faint" style={{ fontSize: 13 }}>
-              {t("inbox.showing", { from: offset + 1, to: Math.min(offset + PAGE, total), total })}
+              {t("inbox.showing", {
+                from: cursorMode ? page.shown + 1 : offset + 1,
+                to: cursorMode ? page.shown + items.length : Math.min(offset + PAGE, total),
+                total,
+              })}
             </span>
             <div className="row">
-              <button className="small" disabled={!hasPrev} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
+              <button
+                className="small"
+                disabled={!hasPrev}
+                onClick={() =>
+                  cursorMode ? setPages(pages.slice(0, -1)) : setOffset(Math.max(0, offset - PAGE))
+                }
+              >
                 {t("inbox.newer")}
               </button>
-              <button className="small" disabled={!hasNext} onClick={() => setOffset(offset + PAGE)}>
+              <button
+                className="small"
+                disabled={!hasNext}
+                onClick={() => {
+                  if (!cursorMode) setOffset(offset + PAGE);
+                  else if (data?.nextCursor)
+                    setPages([...pages, { cursor: data.nextCursor, shown: page.shown + items.length }]);
+                }}
+              >
                 {t("inbox.older")}
               </button>
             </div>
