@@ -36,5 +36,10 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "globals": "^15.14.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici@>=8.0.0 <8.12.2": ">=8.12.2"
+    }
   }
 }
