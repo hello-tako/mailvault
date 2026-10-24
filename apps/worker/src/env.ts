@@ -57,6 +57,12 @@ export interface Env {
    * takeover flags the request carries.
    */
   DOMAIN_DENYLIST?: string;
+  /**
+   * Origin the customer code portal is served from. The app's own hostname sits behind Cloudflare
+   * Access on every path, so a buyer's link cannot open there; this names the public hostname that
+   * is. Unset falls back to the request's origin, which is what local development wants.
+   */
+  PORTAL_ORIGIN?: string;
   DEV_AUTH_BYPASS?: string;
   /**
    * Name of the queue that Email Sending delivery events land on, since one Worker consumes

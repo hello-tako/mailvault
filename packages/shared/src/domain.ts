@@ -128,6 +128,6 @@ export type DomainIdsBody = z.infer<typeof DomainIdsBodySchema>;
 /** Dangerous-action confirmation wrapper for takeover operations. */
 export const ConfirmationTokenSchema = z.object({
   confirm: z.literal(true, {
-    errorMap: () => ({ message: "Explicit confirmation required for destructive action" }),
+    error: "Explicit confirmation required for destructive action",
   }),
 });

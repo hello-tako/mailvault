@@ -55,8 +55,8 @@ describe("arrivalLabel", () => {
   const labelled = { aliasLabel: "GitHub", aliasAddress: "gh-7f2a@demo.example", domainName: "demo.example" };
   const unlabelled = { aliasLabel: null, aliasAddress: "gh-7f2a@demo.example", domainName: "demo.example" };
 
-  it("spells out the domain when rows from several mailboxes are mixed", () => {
-    expect(arrivalLabel(labelled, false)).toBe("GitHub · demo.example");
+  it("leads with the domain when rows from several mailboxes are mixed", () => {
+    expect(arrivalLabel(labelled, false)).toBe("demo.example · GitHub");
   });
 
   it("drops the domain inside one mailbox, where every row shares it", () => {

@@ -11,9 +11,11 @@ import { createCloudflareClient } from "./cf/api-client";
 import { createApp } from "./app";
 import { decorateResponse } from "./security/headers";
 import { stageEmail, commitIngest, type IngestJob } from "./mail/ingest";
+import { isPortalHost } from "./portal/link";
 import { consumeDeliveryEvents } from "./mail/delivery";
 import { pushToAll } from "./push";
 import { Elapsed, writeMetric } from "./lib/metrics";
+import { recordOpsFailure } from "./lib/ops-alert";
 import { MailboxHub, notifyNewMail } from "./live/hub";
 import { log } from "./lib/logging";
 import { runWatchdog } from "./provisioning/watchdog";
@@ -27,13 +29,25 @@ const app = createApp();
 
 export default {
   /**
-   * HTTP: `/api/*` is served by the authenticated router; every other path falls
-   * through to Workers Static Assets (the SPA), which handles its own routing.
-   * Responses are hardened with security headers here so errors and assets included.
+   * HTTP: `/api/*` is served by the authenticated router, `/c/*` by the customer code portal
+   * (its own credential, no Access), and every other path falls through to Workers Static
+   * Assets (the SPA), which handles its own routing. Responses are hardened with security
+   * headers here so errors and assets are included.
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+    const portalOnly = isPortalHost(env, url.host);
+    if (portalOnly && !url.pathname.startsWith("/c/")) {
+      return decorateResponse(
+        env,
+        request.url,
+        new Response("Not found", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8", "x-robots-tag": "noindex, nofollow", "cache-control": "no-store" },
+        }),
+      );
+    }
+    if (url.pathname === "/api" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/c/")) {
       const res = await app.fetch(request, env, ctx);
       return decorateResponse(env, request.url, res);
     }
@@ -91,7 +105,7 @@ export default {
    */
   async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
     if (batch.queue === deliveryEventsQueue(env)) {
-      await consumeDeliveryBatch(batch, env);
+      await consumeDeliveryBatch(batch, env, ctx);
       return;
     }
     await consumeIngestBatch(batch as MessageBatch<IngestJob>, env, ctx);
@@ -190,6 +204,9 @@ async function consumeIngestBatch(
         error: err instanceof Error ? err.message : "error",
       });
       message.retry();
+      // Detached on purpose: the alert is about the streak, and asking a failing pipeline
+      // to also send mail synchronously would put the alert inside the retry it reports on.
+      ctx.waitUntil(recordOpsFailure(env, "ingest-commit", err instanceof Error ? err.message : "error"));
     }
   }
 }
@@ -200,7 +217,7 @@ async function consumeIngestBatch(
  * turns an unknown message id into a known one. Nothing here touches R2 — a delivery event
  * reports on a message, it is not a copy of one.
  */
-async function consumeDeliveryBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+async function consumeDeliveryBatch(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
   try {
     await consumeDeliveryEvents(
       batch.messages.map((m) => m.body),
@@ -215,5 +232,6 @@ async function consumeDeliveryBatch(batch: MessageBatch<unknown>, env: Env): Pro
       error: err instanceof Error ? err.message : "error",
     });
     for (const message of batch.messages) message.retry();
+    ctx.waitUntil(recordOpsFailure(env, "delivery-events", err instanceof Error ? err.message : "error"));
   }
 }

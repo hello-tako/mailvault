@@ -126,7 +126,10 @@ test("@mobile the alias delete confirmation is usable", async ({ page }) => {
 
 test("@mobile the message delete confirmation is usable", async ({ page }) => {
   await page.goto(`/#/messages/${M1}`);
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  // Delete sits in the row's More menu now, so the confirmation is reached the way the owner
+  // reaches it — and the menu is a popover, which is part of what this suite measures.
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   await expectDialogUsable(page);
 });
 

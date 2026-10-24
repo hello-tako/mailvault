@@ -6,7 +6,7 @@ import { parseSearchQuery, type MessageCounters } from "@mailvault/shared";
 
 /**
  * The strip that says which mail is on screen: the five views, the mailbox the list is
- * narrowed to, and the words filtering it.
+ * narrowed to, the words filtering it, and the two controls over how the same mail is arranged.
  *
  * The operator chips are read back from the same parser the Worker runs, and each one removes
  * itself from the query it describes. That is the point of showing them at all: a search that
@@ -24,6 +24,9 @@ export function InboxToolbar({
   mailboxes,
   domainId,
   aliasId,
+  grouped,
+  onGrouped,
+  onRefresh,
   /** The rail carries the mailbox list on a wide screen; a phone still needs the picker. */
   mailboxPicker,
 }: {
@@ -37,6 +40,9 @@ export function InboxToolbar({
   mailboxes: { domainId: string; name: string }[];
   domainId?: string;
   aliasId?: string;
+  grouped: boolean;
+  onGrouped: (next: boolean) => void;
+  onRefresh: () => void;
   mailboxPicker: boolean;
 }) {
   const intent = useMemo(() => parseSearchQuery(search), [search]);
@@ -99,14 +105,33 @@ export function InboxToolbar({
             ))}
           </select>
         )}
+        {/* One field, submitting on its own key: a button that repeats the field's label is a
+            second control doing what the keyboard already does, and it cost this line a
+            search box narrow enough to hide an operator in it. */}
         <input
           className="search"
+          type="search"
           placeholder={t("inbox.placeholder")}
           aria-label={t("common.search")}
           value={q}
           onChange={(e) => onQ(e.target.value)}
         />
-        <button type="submit">{t("common.search")}</button>
+        <div className="toolbar-tools">
+          {/* A view preference, not a filter: grouping changes how the same messages are
+              stacked, so it belongs with the other view control rather than the page title. */}
+          <button
+            type="button"
+            className="ghost small"
+            aria-pressed={grouped}
+            title={search ? t("inbox.groupOffWhileSearching") : t("inbox.groupHint")}
+            onClick={() => onGrouped(!grouped)}
+          >
+            {t("inbox.groupConversations")}
+          </button>
+          <button type="button" className="ghost small icon" aria-label={t("common.refresh")} title={t("common.refresh")} onClick={onRefresh}>
+            ⟳
+          </button>
+        </div>
         {aliasId && (
           <button type="button" className="ghost small" onClick={() => navigate("/inbox")}>
             {t("inbox.clearAlias")}

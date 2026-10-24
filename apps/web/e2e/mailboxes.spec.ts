@@ -98,6 +98,8 @@ test("phone: the filters share two lines so mail starts near the top @mobile", a
   // vertically), rather than stacking a third row of controls above the mail.
   expect(picker!.y, "picker starts below the tabs' line").toBeLessThan(tabs!.y + tabs!.height);
   expect(picker!.y + picker!.height, "picker ends above the tabs' line").toBeGreaterThan(tabs!.y);
-  expect(Math.round(top!.y)).toBeLessThan(300);
+  // Measured at 206px: a title line, one line of tabs and the picker, one line of search.
+  // An extra wrapped line of filters costs ~52px of mail, which is what this bound is for.
+  expect(Math.round(top!.y)).toBeLessThan(240);
   await page.screenshot({ path: "e2e-screens/inbox-mailbox.png", fullPage: true });
 });

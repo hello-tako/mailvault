@@ -16,6 +16,7 @@ import { liveRoute } from "./routes/live";
 import { securityRoute } from "./routes/security";
 import { rulesRoute } from "./routes/rules";
 import { semanticRoute } from "./routes/semantic";
+import { portalRoute } from "./routes/portal";
 
 /**
  * Assembles the HTTP API. Ordering matters: the unauthenticated liveness probe is
@@ -31,6 +32,11 @@ export function createApp(): Hono<AppEnv> {
 
   // Public: coarse health only. Never gated, exposes no identity/config.
   app.route("/", healthRoute);
+
+  // The customer code portal is public by design and lives outside /api on purpose: the gate
+  // below is what keeps a stranger out of the mailbox, and this route must never grow a path
+  // that slips under it. Its credential is a 192-bit token that can ask for one code only.
+  app.route("/", portalRoute);
 
   // Everything else under /api requires a valid Cloudflare Access identity.
   app.use("/api/*", async (c, next) => {

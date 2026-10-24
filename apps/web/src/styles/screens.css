@@ -27,13 +27,9 @@
 /* The palette has no phone trigger by design: a handset has a tab bar and a search field,
    and a third way to type the same query is not "tinh gọn". */
 .rail-search { display: none; }
-/* The rail's identity block and its live-status foot are desktop furniture: on a phone the
-   fixed bar is a tab bar and nothing else may sit inside it. */
-.sidebar .spacer, .rail-foot { display: none; }
 .brand-mark { display: grid; place-content: center; width: 30px; height: 30px; border-radius: 9px; color: var(--accent-ink); background: linear-gradient(150deg, var(--accent), var(--accent-dim)); box-shadow: 0 4px 14px -4px var(--accent-glow); }
 .brand-text { display: grid; line-height: 1.1; }
 .brand-text b { font-size: var(--text-lg); font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
-.brand-text span { font-size: var(--text-2xs); font-weight: 700; letter-spacing: var(--track-eyebrow); text-transform: uppercase; color: var(--faint); }
 
 .nav { display: flex; flex-direction: row; flex: 1; gap: 2px; padding: 5px; }
 .nav a {
@@ -145,15 +141,18 @@
  */
 .mail-split { display: grid; grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 .mail-list { min-width: 0; }
-/* A 460px column is a phone, not a desktop row: stack the sender, subject and where it
-   arrived instead of truncating all three to three letters. */
-.mail-list .msg-link { grid-template-columns: minmax(0, 1fr); }
-/* `auto` rows, not just column 1: the wide-screen rule pins sender and subject to
-   row 1, and in one column that stacks them on top of each other. */
-.mail-list .msg-sender,
-.mail-list .msg-subject,
-.mail-list .msg-line { grid-column: 1; grid-row: auto; }
-.mail-list .msg-line { gap: 8px; }
+/* A 460px column is a phone, not a desktop row: sender, subject and preview truncated into
+   what is left of it after the tick and the time say nothing. The pane therefore keeps the
+   phone's two-line stacking even though the window is wide. */
+.mail-list .msg-row {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "check star sender time"
+    "check star line   line";
+  gap: 1px 8px;
+  min-height: 0;
+  padding: 7px 10px;
+}
 .mail-pane {
   position: sticky;
   top: var(--space-2);
@@ -168,13 +167,7 @@
 }
 .pane-body { padding: var(--space-3); }
 .pane-body > :first-child { margin-top: 0; }
-.pane-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: var(--space-2); }
-/* The pane is a column of its own: the addressing has to stay one or two lines, and the
-   actions go under it rather than competing with the subject for width. */
-.mail-pane h1 { font-size: var(--text-h2); }
-.mail-pane .subject-meta { font-size: var(--text-xs); }
-.mail-pane .detail-head { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
-.mail-pane .actions-cell { justify-content: flex-start; }
+.pane-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: var(--space-1); }
 .mail-pane .card { box-shadow: none; }
 
 /* ── Message view ──────────────────────────────────────────────────────── */
@@ -194,18 +187,82 @@
 .ribbon.trusted { color: var(--ok); border-color: var(--ok-line); background: var(--ok-tint); }
 .ribbon.unverified { color: var(--warn); border-color: var(--warn-line); background: var(--warn-tint); }
 .ribbon.spoofed { color: var(--danger); border-color: var(--danger-line); background: var(--danger-tint); }
-.ribbon .detail { font-weight: 600; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-2xs); overflow-wrap: anywhere; }
-
-.subject-head { display: flex; gap: 12px; align-items: flex-start; }
-.subject-head h1 { letter-spacing: -0.028em; }
-.subject-meta { display: grid; gap: 3px; font-size: var(--text-sm); color: var(--muted); min-width: 0; }
-.subject-meta .who { color: var(--text); font-weight: 750; font-size: var(--text-base); }
-.subject-meta .addr { font-size: var(--text-xs); color: var(--faint); }
-
-/* The ribbon reads as one statement: a mark, a verdict, then the evidence under it. */
+/* The ribbon reads as one statement: a mark, then the verdict in the same colour as the mark. */
 .ribbon .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none; }
-.ribbon-body { display: grid; gap: 2px; min-width: 0; }
 .ribbon .head { font-weight: 800; }
+
+/*
+ * The reading header is what the message is, in as few lines as that takes: the subject, one
+ * wrapped line of who/when/where, one row of actions. The monogram it used to lead with said
+ * nothing the sender name did not, and the four buttons beside it competed with the subject.
+ */
+/* The subject is one step below a page title: it is the largest thing here, but the pane and
+   the page already say what screen this is, and a 30px heading spent two lines of a phone. */
+.mail-head h1 { margin: 0 0 5px; font-size: var(--text-h2); letter-spacing: -0.028em; }
+.mail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.mail-meta .who { color: var(--text); font-weight: 750; font-size: var(--text-base); }
+.mail-meta .addr { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--faint); overflow-wrap: anywhere; }
+.mail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--space-2); }
+
+/* A code is the payload, so it is a strip of cards at the top rather than a section to find. */
+.code-strip { display: flex; flex-wrap: wrap; gap: 10px; }
+.code-strip .code-card { flex: 1 1 220px; }
+
+.body-bar { margin-bottom: 8px; }
+.body-bar h2 { margin: 0; }
+.attach .file-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach .file-size { font-size: var(--text-xs); }
+
+/*
+ * What a message carries that is not the message: the links, the evidence behind the verdict,
+ * how a send was delivered. One row each, and the row says what is inside before it opens.
+ */
+.fold { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px var(--space-2);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+/* The chevron is the affordance, so it is drawn rather than left to the UA marker — which
+   Safari puts outside the box and a screen reader may or may not announce. */
+.fold > summary::after {
+  content: "›";
+  margin-left: auto;
+  font-size: var(--text-base);
+  color: var(--faint);
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.fold[open] > summary::after { transform: rotate(90deg); }
+.fold > summary:hover { background: var(--surface-2); }
+.fold-n {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.fold-body { display: grid; gap: 10px; padding: 0 var(--space-2) var(--space-2); }
+.mono-note { margin: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
 
 /* ── Settings ──────────────────────────────────────────────────────────── */
 
@@ -250,17 +307,15 @@
 /* ── Tablet and up ─────────────────────────────────────────────────────── */
 
 @media (min-width: 700px) {
-  /* The classic two-line mail row: who and what on one line, where and preview under it. */
-  .msg-row { align-items: center; padding: 11px 14px; }
-  .msg-link {
-    grid-template-columns: minmax(150px, 216px) minmax(0, 1fr);
-    column-gap: 16px;
-    align-items: baseline;
+  /* One line, the way a desktop list is read: the sender holds a column, everything the message
+     is made of flows in the space left to it, and the row is 40px rather than 120. */
+  .msg-row {
+    grid-template-columns: auto auto minmax(88px, 200px) minmax(0, 1fr) auto;
+    grid-template-areas: "check star sender line time";
+    gap: 0 10px;
+    min-height: 40px;
+    padding: 0 14px;
   }
-  .msg-sender { grid-column: 1; grid-row: 1; }
-  .msg-subject { grid-column: 2; grid-row: 1; }
-  .msg-line { grid-column: 2; grid-row: 2; }
-  .msg-alias { max-width: none; }
   .detail-head { flex-direction: row; align-items: flex-start; justify-content: space-between; }
   .detail-head .actions-cell { justify-content: flex-end; }
   .vault { grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: var(--space-3); }
@@ -277,7 +332,7 @@
     height: 100dvh;
     flex-direction: column;
     align-items: stretch;
-    gap: var(--space-3);
+    gap: var(--space-2);
     padding: var(--space-3) var(--space-2);
     background: var(--surface);
     border-right: 1px solid var(--border);
@@ -304,8 +359,6 @@
   }
   .rail-search:hover { color: var(--text); border-color: var(--border-strong); }
   .rail-search kbd { margin-left: auto; }
-  .sidebar .spacer { display: block; margin-top: auto; }
-  .rail-foot { display: grid; }
   /* `flex: 1` is a phone rule that makes the bar fill the strip; on a rail it would stretch
      the nav down the whole column and push the mailbox list off the end of it. */
   .nav { flex: 0 0 auto; flex-direction: column; gap: 3px; padding: 0; }
@@ -314,9 +367,9 @@
     flex: 0 0 auto;
     flex-direction: row;
     justify-content: flex-start;
-    gap: 11px;
-    min-height: 42px;
-    padding: 9px 11px;
+    gap: 10px;
+    min-height: 38px;
+    padding: 8px 10px;
     font-size: var(--text-base);
     font-weight: 700;
     text-align: left;
@@ -331,8 +384,6 @@
     margin: -10px 0 0 0;
     border-radius: 0 3px 3px 0;
   }
-  .rail-foot { display: grid; gap: 6px; padding: var(--space-2) 8px 0; border-top: 1px solid var(--border-soft); font-size: var(--text-2xs); color: var(--faint); }
-
   .page { padding: var(--space-4); }
   .toolbar--sticky { position: static; background: none; backdrop-filter: none; margin: 0 0 var(--space-2); padding: 0; border-bottom: 0; }
   .modal-backdrop { align-items: center; padding: var(--space-3); }
@@ -342,11 +393,21 @@
 
   /* Wide enough for the three facts that matter to sit on one line: what it is, where
      mail goes to it, how much has arrived. */
-  .entity-id { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; align-items: baseline; column-gap: 18px; row-gap: 2px; }
+  .entity-id { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; align-items: baseline; column-gap: 18px; row-gap: 2px; }
   .entity-title { grid-column: 1; grid-row: 1; }
   .entity-addr { grid-column: 2; grid-row: 1; }
   .entity-facts { grid-column: 3; grid-row: 1; justify-content: flex-end; }
-  .entity-note { grid-column: 1 / -1; grid-row: 2; }
+  /* Wide enough for the owner's sentence about the alias to earn its line — one, clamped. */
+  .entity-note {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .entity.is-open .entity-note { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
   .entity-summary { gap: 16px; }
   /* ── Mailboxes in the rail ────────────────────────────────────────────────
    * A mailbox is a place, not a filter, so it sits under Inbox where the eye

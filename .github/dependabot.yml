@@ -1,8 +1,23 @@
 version: 2
 updates:
+  # Application dependencies. React, Hono, wrangler and the test stack all move often
+  # enough that a weekly PR each is quieter than a quarterly pile.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Wrangler majors change deploy behaviour; a batch keeps the PR reviewable.
+    groups:
+      dev-and-minor:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+
+  # The workflows themselves: actions/checkout and friends also get patched.
   - package-ecosystem: github-actions
-    directory: /
+    directory: "/"
     schedule:
       interval: weekly
     commit-message:
-      prefix: "chore(actions)"
+      prefix: "chore(ci)"

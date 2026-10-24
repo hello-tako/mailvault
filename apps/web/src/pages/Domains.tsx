@@ -403,10 +403,7 @@ export function Domains() {
   return (
     <div className="page">
       <div className="page-head">
-        <div>
-          <span className="eyebrow">{t("dom.eyebrow")}</span>
-          <h1>{t("dom.title")}</h1>
-        </div>
+        <h1>{t("dom.title")}</h1>
         <div className="actions">
           <button onClick={runSync} disabled={busy}>
             {busy ? t("common.working") : t("dom.sync")}

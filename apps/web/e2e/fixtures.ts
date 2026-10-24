@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /*
  * The local D1 survives between E2E runs, and the app's own behaviour — opening a message
@@ -74,6 +74,17 @@ export async function resetSeededFlags(page: Page, starred: string[]) {
       });
     }
   }, { all: SEEDED_MAILS, keep: starred, unread: SEEDED_UNREAD });
+}
+
+/**
+ * Open one of a message's folded detail panels — the links it carries, the authentication
+ * evidence, how a send was delivered. They start folded (Settings can turn that off), and a
+ * suite that reasons about what is inside one has to ask for it the way the owner does.
+ */
+export async function openFold(scope: Page | Locator, title: string) {
+  const summary = scope.locator(".fold > summary", { hasText: title });
+  await expect(summary, `the "${title}" panel is offered`).toBeVisible();
+  await summary.click();
 }
 
 /** A local-only grant fixture for cleanup; route enforcement is tested separately. */

@@ -82,15 +82,26 @@ export function vapidPublicKey(jwk: JsonWebKey): string {
 }
 
 async function vapidAssertion(endpoint: string, cfg: { jwk: JsonWebKey; subject: string; publicKey: string }): Promise<string> {
+  // Every subscriber on one push service gets an identical assertion for the same origin;
+  // signing it once per sweep rather than once per device is most of the saving.
+  const origin = new URL(endpoint).origin;
+  const cached = assertionCache.get(origin);
+  if (cached && Date.now() - cached.at < ASSERTION_TTL_MS) return cached.value;
   const key = await importJWK(cfg.jwk, "ES256");
   const jwt = await new SignJWT({})
     .setProtectedHeader({ typ: "JWT", alg: "ES256" })
-    .setAudience(new URL(endpoint).origin)
+    .setAudience(origin)
     .setSubject(cfg.subject)
     .setExpirationTime("12h")
     .sign(key);
-  return `vapid t=${jwt}, k=${cfg.publicKey}`;
+  const value = `vapid t=${jwt}, k=${cfg.publicKey}`;
+  assertionCache.set(origin, { at: Date.now(), value });
+  return value;
 }
+
+/** Assertions live ~11h of their 12h lifetime; the sweep that finds one expired re-signs. */
+const ASSERTION_TTL_MS = 11 * 60 * 60_000;
+const assertionCache = new Map<string, { at: number; value: string }>();
 
 type PushResult = "ok" | "gone" | "failed";
 
@@ -185,28 +196,40 @@ export async function pushToAll(env: Env, db: D1Database, fetchImpl: typeof fetc
   }
 
   const outcome: PushOutcome = { sent: 0, pruned: 0, failed: 0 };
-  for (const target of targets) {
-    const result = await pushOne(target, cfg, fetchImpl);
-    if (result === "ok") {
+  // Independent endpoints, asked together: one slow push service must not delay every
+  // other device's notification (nor the queue consumer that triggered this).
+  const settled = await Promise.allSettled(targets.map((target) => pushOne(target, cfg, fetchImpl)));
+  const now = nowIso();
+  const writes: D1PreparedStatement[] = [];
+  const failureWrites: { index: number; id: string }[] = [];
+  settled.forEach((result, i) => {
+    const target = targets[i]!;
+    const value = result.status === "fulfilled" ? result.value : "failed";
+    if (value === "ok") {
       outcome.sent += 1;
-      await db.prepare(`UPDATE push_subscriptions SET last_ok_at = ?2, fails = 0, updated_at = ?2 WHERE id = ?1`).bind(target.id, nowIso()).run();
-      continue;
-    }
-    if (result === "gone") {
-      await db.prepare(`DELETE FROM push_subscriptions WHERE id = ?1`).bind(target.id).run();
+      writes.push(
+        db.prepare(`UPDATE push_subscriptions SET last_ok_at = ?2, fails = 0, updated_at = ?2 WHERE id = ?1`).bind(target.id, now),
+      );
+    } else if (value === "gone") {
       outcome.pruned += 1;
+      writes.push(db.prepare(`DELETE FROM push_subscriptions WHERE id = ?1`).bind(target.id));
       log.info("push_subscription_pruned", { id: target.id, reason: "gone" });
-      continue;
+    } else {
+      outcome.failed += 1;
+      failureWrites.push({ index: writes.length, id: target.id });
+      writes.push(
+        db.prepare(`UPDATE push_subscriptions SET fails = fails + 1, updated_at = ?2 WHERE id = ?1 RETURNING fails`).bind(target.id, now),
+      );
     }
-    outcome.failed += 1;
-    const res = await db
-      .prepare(`UPDATE push_subscriptions SET fails = fails + 1, updated_at = ?2 WHERE id = ?1 RETURNING fails`)
-      .bind(target.id, nowIso())
-      .first<{ fails: number }>();
-    const fails = Number(res?.fails ?? 0);
-    if (fails >= MAX_FAILURES) {
-      await db.prepare(`DELETE FROM push_subscriptions WHERE id = ?1`).bind(target.id).run();
-      log.info("push_subscription_pruned", { id: target.id, reason: "repeated-failure" });
+  });
+  if (writes.length > 0) {
+    const results = await db.batch(writes);
+    // The RETURNING column is what decides a retirement, so the deletions are a second
+    // batch over only the endpoints that just crossed the line.
+    const deaths = failureWrites.filter((fw) => Number((results[fw.index]?.results?.[0] as { fails?: number })?.fails ?? 0) >= MAX_FAILURES);
+    if (deaths.length > 0) {
+      await db.batch(deaths.map((fw) => db.prepare(`DELETE FROM push_subscriptions WHERE id = ?1`).bind(fw.id)));
+      for (const fw of deaths) log.info("push_subscription_pruned", { id: fw.id, reason: "repeated-failure" });
     }
   }
   log.info("push_run", { sent: outcome.sent, pruned: outcome.pruned, failed: outcome.failed });

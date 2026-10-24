@@ -114,7 +114,13 @@ function outcomeLabel(auth: MessageAuth | null): string {
     : `${parts.join("  ")}  ${t("msg.authNoVouch")}`;
 }
 
-export function AuthBanner({ verdict, auth }: { verdict: AuthVerdict; auth: MessageAuth | null }) {
+/**
+ * The one-line verdict. What it was measured against is `AuthDetail`, which sits folded under
+ * the message: the conclusion belongs where a reader can see it without asking, the evidence
+ * belongs where they can ask. The one exception main hardened and its test demands: an
+ * UNVERIFIED verdict explains *why* it cannot vouch — header results alone establish nothing.
+ */
+export function AuthBanner({ verdict, auth }: { verdict: AuthVerdict; auth?: MessageAuth | null }) {
   const head =
     verdict === AuthVerdict.Trusted
       ? "msg.authTrusted"
@@ -128,24 +134,32 @@ export function AuthBanner({ verdict, auth }: { verdict: AuthVerdict; auth: Mess
         ? "spoofed"
         : "unverified";
   return (
-    <div className={`ribbon ${cls} mt`} role="status">
+    <div className={`ribbon ${cls}`} role="status">
       <span className="dot" aria-hidden="true" />
-      <span className="ribbon-body">
-        <span className="head">{t(head)}</span>
-        <span className="detail">
-          {auth
-            ? outcomeLabel(auth)
-            : verdict === AuthVerdict.Unverified
-              ? t("msg.authAssessmentUnavailable")
-              : outcomeLabel(auth)}
-        </span>
-        {verdict === AuthVerdict.Unverified ? (
-          <span className="detail">{t("msg.authSourceUntrusted")}</span>
-        ) : null}
-        {verdict === AuthVerdict.Spoofed && auth?.reasons.length ? (
-          <span className="detail">{t("msg.authWhy", { reasons: auth.reasons.join("; ") })}</span>
-        ) : null}
-      </span>
+      <span className="head">{t(head)}</span>
+      {verdict === AuthVerdict.Unverified ? (
+        <>
+          {!auth ? <span className="ribbon-note">{t("msg.authAssessmentUnavailable")}</span> : null}
+          <span className="ribbon-note">{t("msg.authSourceUntrusted")}</span>
+        </>
+      ) : null}
+      {verdict === AuthVerdict.Spoofed && auth?.reasons.length ? (
+        <span className="ribbon-note">{t("msg.authWhy", { reasons: auth.reasons.join("; ") })}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/** What the verdict was computed from, in the same words as its colour. */
+export function AuthDetail({ verdict, auth }: { verdict: AuthVerdict; auth: MessageAuth | null }) {
+  return (
+    <div className="stack">
+      <p className="mono-note">{outcomeLabel(auth)}</p>
+      {verdict === AuthVerdict.Spoofed && auth?.reasons.length ? (
+        <p className="muted" style={{ margin: 0 }}>
+          {t("msg.authWhy", { reasons: auth.reasons.join("; ") })}
+        </p>
+      ) : null}
     </div>
   );
 }

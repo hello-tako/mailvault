@@ -40,6 +40,17 @@ import { actorOf, parseQuery, readJson } from "./_helpers";
 const IdParam = z.object({ id: z.string().min(1) });
 const AttachmentParam = z.object({ messageId: z.string().min(1), attachmentId: z.string().min(1) });
 
+/** `receivedAt|id` → the pair, or undefined when the client sent something unusable. */
+function parseCursor(raw: string | undefined): { receivedAt: string; id: string } | undefined {
+  if (!raw) return undefined;
+  const idx = raw.lastIndexOf("|");
+  if (idx <= 0) return undefined;
+  const receivedAt = raw.slice(0, idx);
+  const id = raw.slice(idx + 1);
+  if (!id || Number.isNaN(Date.parse(receivedAt))) return undefined;
+  return { receivedAt, id };
+}
+
 /**
  * Which column each bulk flag action moves, and to what. `delete` is absent because it is
  * not a flag; it is handled on its own path. Totaling the two coverage sets is what makes
@@ -82,8 +93,13 @@ export const messagesRoute = new Hono<AppEnv>()
     // ask for semantic ids directly.
     const semanticIds =
       query.q && (await semanticEnabled(c.env.DB)) ? await searchMessageIds(c.env, query.q) : [];
-    const { items, total } = await listMessages(c.env.DB, { ...query, semanticIds });
-    return c.json(paginated(items, { limit: query.limit, offset: query.offset, total }));
+    const { items, total } = await listMessages(c.env.DB, { ...query, semanticIds, before: parseCursor(query.before) });
+    // A cursor the client can follow exists only for the plain list — a search reorders
+    // rows by rank and a threaded view partitions them, so there they page by offset.
+    const last = items[items.length - 1];
+    const nextCursor =
+      !query.q && !query.threaded && last && items.length === query.limit ? `${last.receivedAt}|${last.id}` : null;
+    return c.json({ ...paginated(items, { limit: query.limit, offset: query.offset, total }), nextCursor });
   })
 
   .get("/api/deletions", async (c) =>
@@ -153,18 +169,15 @@ export const messagesRoute = new Hono<AppEnv>()
     const detail = await getMessageDetail(c.env.DB, id);
     if (!detail) throw notFound("Message not found");
 
-    const row = await getMessageRow(c.env.DB, id);
-    const parsed = await readParsed(c.env.MAIL_BUCKET, row?.parsed_r2_key ?? null);
+    const { parsedR2Key, ...body } = detail;
+    const parsed = await readParsed(c.env.MAIL_BUCKET, parsedR2Key);
     const allowRemote = ["1", "true"].includes((c.req.query("remoteImages") ?? "").toLowerCase());
 
     return c.json({
-      ...detail,
+      ...body,
       textBody: parsed?.text ?? null,
-      htmlBody: parsed?.html
-        ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote })
-        : null,
-      parseDegraded: detail.parseDegraded || parsed?.degraded === true,
-      appliedRuleNote: row?.applied_rule_note ?? null,
+      htmlBody: parsed?.html ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote }) : null,
+      parseDegraded: body.parseDegraded || parsed?.degraded === true,
     });
   })
 
@@ -213,6 +226,34 @@ export const messagesRoute = new Hono<AppEnv>()
       { deleted: result.state === "DONE", state: result.state },
       result.state === "DONE" ? 200 : 202,
     );
+  })
+
+  /**
+   * The original bytes exactly as they arrived — for archiving a message outside the
+   * vault, or moving it to another mail system. The stored raw object is the source the
+   * parsed view was derived from, so what downloads is what was delivered, not a rebuild.
+   */
+  .get("/api/messages/:id/raw", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const row = await getMessageRow(c.env.DB, id);
+    if (!row) throw notFound("Message not found");
+    const obj = await getObject(c.env.MAIL_BUCKET, row.raw_r2_key);
+    if (!obj) throw notFound("The original message is no longer in storage");
+    const base =
+      (row.subject ?? "message")
+        .normalize("NFKD")
+        .replace(/[^\w\s.-]+/g, "")
+        .trim()
+        .slice(0, 60) || "message";
+    return new Response(obj.body, {
+      headers: {
+        "content-type": "message/rfc822",
+        "content-disposition": `attachment; filename="${base}.eml"`,
+        "content-length": String(obj.size),
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      },
+    });
   })
 
   /**

@@ -3,12 +3,14 @@ import { BulkMessageAction } from "@mailvault/shared";
 import type { View } from "../../lib/mailviews";
 
 /**
- * The actions a selection can take, beside the rows it was made from.
+ * The list's head row: the master checkbox, and the actions a selection can take.
  *
- * It sits at the head of the list rather than floating over it, because a bar that covers the
- * first two messages hides exactly the rows being decided about. On a phone it is not drawn at
- * all until something is selected — there, the first rows of mail are worth more than the
- * promise of a control used occasionally.
+ * The actions exist only while a selection does. Five buttons above an untouched list were
+ * asking what to do before there was anything to do with, and they cost the row of mail that
+ * would otherwise start there. It sits at the head of the list rather than floating over it,
+ * because a bar that covers the first two messages hides exactly the rows being decided about.
+ * On a phone it is not drawn at all until something is selected — there, the first rows of
+ * mail are worth more than the promise of a control used occasionally.
  */
 export function BulkBar({
   count,
@@ -42,7 +44,7 @@ export function BulkBar({
   ];
 
   return (
-    <div className="bulkbar" role="toolbar" aria-label={t("bulk.actions")}>
+    <div className={`bulkbar${empty ? " is-idle" : ""}`} role="toolbar" aria-label={t("bulk.actions")}>
       <span className="bulk-all">
         <input
           type="checkbox"
@@ -57,19 +59,21 @@ export function BulkBar({
         />
       </span>
       <span className="bulk-count">{empty ? t("inbox.selectAllHint") : t("bulk.nSelected", { n: count })}</span>
-      <div className="bulk-actions">
-        {actions.map(({ action, label, danger }) => (
-          <button
-            key={action}
-            type="button"
-            className={`small${danger ? " danger" : ""}`}
-            disabled={empty || busy}
-            onClick={() => (action === BulkMessageAction.Delete ? onDelete() : onAction(action))}
-          >
-            {t(label)}
-          </button>
-        ))}
-      </div>
+      {!empty && (
+        <div className="bulk-actions">
+          {actions.map(({ action, label, danger }) => (
+            <button
+              key={action}
+              type="button"
+              className={`small${danger ? " danger" : ""}`}
+              disabled={busy}
+              onClick={() => (action === BulkMessageAction.Delete ? onDelete() : onAction(action))}
+            >
+              {t(label)}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

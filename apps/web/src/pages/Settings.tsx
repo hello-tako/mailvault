@@ -6,14 +6,8 @@ import { registerPasskey, removePasskey } from "../lib/passkeys";
 import { useAsync } from "../lib/useAsync";
 import { relativeTime } from "../lib/format";
 import { LANGS, lang, languageName, setLang, t, type Lang } from "../lib/i18n";
-import {
-  THEME_CHOICES,
-  setTheme,
-  theme,
-  themeName,
-  useTheme,
-  type ThemeChoice,
-} from "../lib/theme";
+import { THEME_CHOICES, setTheme, theme, themeName, useTheme, type ThemeChoice } from "../lib/theme";
+import { insightsOpen, setInsightsOpen } from "../lib/insights";
 import { IconAuto, IconMoon, IconSun } from "../components/Icons";
 
 type Status = { tone: "ok" | "error"; text: string } | null;
@@ -22,13 +16,14 @@ const errText = (e: unknown) =>
   e instanceof ApiClientError ? e.message : e instanceof Error ? e.message : t("set.requestFailed");
 
 /**
- * How the interface looks. One card, because language and light/dark are the same kind of
- * choice — a display preference, stored on this device only, that changes nothing about
- * what the server stores or accepts.
+ * How the interface looks. One card, because language, light/dark and whether a message's
+ * detail panels start open are the same kind of choice — a way of reading, stored on this
+ * device only, that changes nothing about what the server stores or accepts.
  */
 function AppearanceCard() {
   const current = lang();
   const { choice } = useTheme();
+  const [insights, setInsights] = useState(() => insightsOpen());
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>{t("set.appearanceTitle")}</h2>
@@ -72,6 +67,35 @@ function AppearanceCard() {
               </button>
             );
           })}
+        </div>
+      </div>
+
+      <div className="setting-row">
+        <span className="label">
+          <b>{t("set.insightsTitle")}</b>
+          <span className="faint">{t("set.insightsHint")}</span>
+        </span>
+        <div className="seg" role="group" aria-label={t("set.insightsLabel")}>
+          <button
+            type="button"
+            className={!insights ? "active" : ""}
+            onClick={() => {
+              setInsights(false);
+              setInsightsOpen(false);
+            }}
+          >
+            {t("set.insightsFold")}
+          </button>
+          <button
+            type="button"
+            className={insights ? "active" : ""}
+            onClick={() => {
+              setInsights(true);
+              setInsightsOpen(true);
+            }}
+          >
+            {t("set.insightsOpen")}
+          </button>
         </div>
       </div>
 

@@ -78,9 +78,7 @@ export function RulesCard() {
     <div className="card mt">
       <h2 style={{ marginTop: 0 }}>{t("rule.title")}</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        {t("rule.introA")}
-        <em>{t("inbox.filed")}</em>
-        {t("rule.introB")}
+        {t("rule.intro")}
       </p>
 
       {error && <div className="banner error">{error}</div>}
@@ -95,7 +93,11 @@ export function RulesCard() {
                   <div className="entity-name">{ruleSummary(r)}</div>
                   <div className="entity-facts">
                     <span>{t(r.hits === 1 ? "rule.hitOnce" : "rule.hits", { n: r.hits })}</span>
-                    {r.lastHitAt ? <span>{t("rule.last", { at: relativeTime(r.lastHitAt) })}</span> : <span>{t("rule.never")}</span>}
+                    {r.lastHitAt ? (
+                      <span>{t("rule.last", { at: relativeTime(r.lastHitAt) })}</span>
+                    ) : (
+                      <span>{t("rule.never")}</span>
+                    )}
                     {!r.enabled ? <span className="pill neutral">{t("rule.paused")}</span> : null}
                   </div>
                 </div>
@@ -103,7 +105,17 @@ export function RulesCard() {
                   <button className="ghost small" disabled={busy} onClick={() => toggleEnabled(r)}>
                     {t(r.enabled ? "rule.pause" : "rule.resume")}
                   </button>
-                  <Menu small items={[{ label: t("rule.delete"), danger: true, disabled: busy, onSelect: () => drop(r) }]} />
+                  <Menu
+                    small
+                    items={[
+                      {
+                        label: t("rule.delete"),
+                        danger: true,
+                        disabled: busy,
+                        onSelect: () => drop(r),
+                      },
+                    ]}
+                  />
                 </div>
               </div>
             </li>
@@ -111,39 +123,70 @@ export function RulesCard() {
         </ul>
       )}
 
-      <form onSubmit={add}>
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}>
-          <div className="field">
-            <label htmlFor="rule-sender">{t("rule.sender")}</label>
-            <input
-              id="rule-sender"
-              value={senderDomain}
-              onChange={(e) => setSenderDomain(e.target.value)}
-              placeholder="newsletters.github.com"
-              maxLength={253}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="rule-subject">{t("rule.subject")}</label>
-            <input id="rule-subject" value={subjectContains} onChange={(e) => setSubjectContains(e.target.value)} placeholder="receipt" maxLength={120} />
-          </div>
-          <div className="field">
-            <label htmlFor="rule-tag">{t("rule.tag")}</label>
-            <input id="rule-tag" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="newsletters" maxLength={60} />
-          </div>
+      {/* The form is folded because it is used when a rule is written, not every time the
+          screen is opened — and left open on a phone it was more screen than the rules are. */}
+      <details className="fold mt">
+        <summary>{t("rule.newTitle")}</summary>
+        <div className="fold-body">
+          <form onSubmit={add}>
+            <div
+              className="grid"
+              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}
+            >
+              <div className="field">
+                <label htmlFor="rule-sender">{t("rule.sender")}</label>
+                <input
+                  id="rule-sender"
+                  value={senderDomain}
+                  onChange={(e) => setSenderDomain(e.target.value)}
+                  placeholder="newsletters.github.com"
+                  maxLength={253}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="rule-subject">{t("rule.subject")}</label>
+                <input
+                  id="rule-subject"
+                  value={subjectContains}
+                  onChange={(e) => setSubjectContains(e.target.value)}
+                  placeholder="receipt"
+                  maxLength={120}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="rule-tag">{t("rule.tag")}</label>
+                <input
+                  id="rule-tag"
+                  value={tag}
+                  onChange={(e) => setTag(e.target.value)}
+                  placeholder="newsletters"
+                  maxLength={60}
+                />
+              </div>
+            </div>
+            <label className="row" style={{ cursor: "pointer", marginTop: 8 }}>
+              <input
+                type="checkbox"
+                style={{ width: "auto" }}
+                checked={archive}
+                onChange={(e) => setArchive(e.target.checked)}
+              />
+              {t("rule.file")}
+            </label>
+            <div className="row-end" style={{ marginTop: 10 }}>
+              <button
+                type="submit"
+                className="primary"
+                disabled={busy || nothingToMatch || nothingToDo}
+              >
+                {t("rule.add")}
+              </button>
+              {nothingToMatch && <span className="field-problem">{t("rule.needsMatch")}</span>}
+              {nothingToDo && <span className="field-problem">{t("rule.needsAction")}</span>}
+            </div>
+          </form>
         </div>
-        <label className="row" style={{ cursor: "pointer", marginTop: 8 }}>
-          <input type="checkbox" style={{ width: "auto" }} checked={archive} onChange={(e) => setArchive(e.target.checked)} />
-          {t("rule.file")}
-        </label>
-        <div className="row-end" style={{ marginTop: 10 }}>
-          <button type="submit" className="primary" disabled={busy || nothingToMatch || nothingToDo}>
-            {t("rule.add")}
-          </button>
-          {nothingToMatch && <span className="field-problem">{t("rule.needsMatch")}</span>}
-          {nothingToDo && <span className="field-problem">{t("rule.needsAction")}</span>}
-        </div>
-      </form>
+      </details>
     </div>
   );
 }

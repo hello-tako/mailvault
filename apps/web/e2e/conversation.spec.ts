@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openFold } from "./fixtures";
 
 /*
  * The parts of a mailbox that are felt when you read rather than when you send: one row per
@@ -52,6 +53,7 @@ test("the `r` key answers what is on screen", async ({ page }) => {
 
 test("unsubscribe: offered for an aligned sender, explained for one that is not", async ({ page }) => {
   await page.goto(`/#/messages/${COMMUNITY}`);
+  await openFold(page, "Unsubscribe");
   const card = page.locator(".unsubscribe");
   await expect(card).toBeVisible();
   const link = card.getByRole("link", { name: "Unsubscribe" });

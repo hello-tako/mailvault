@@ -14,6 +14,7 @@ multi-tenant SaaS.
 ```
 Internet ──SMTP──▶ Cloudflare Email Routing ──▶ Worker.email()   [untrusted input]
 Browser ──HTTPS──▶ Cloudflare Access ──JWT──▶ Worker.fetch()      [authenticated]
+Buyer ──HTTPS──▶ /c/:token (no Access) ──▶ Worker.fetch()         [bearer link, one alias]
                      Worker ──token(secret)──▶ Cloudflare API     [privileged egress]
                      Worker ◀──▶ D1 / R2                          [private storage]
 ```
@@ -56,13 +57,41 @@ secret and scrubbed from every log path.
 - An optional `ALLOWED_EMAILS` allowlist further restricts which Access users are
   honored; an empty list means "any authenticated Access user".
 - Service tokens (no `email` claim) are rejected.
-- The only **public** endpoint is `GET /api/health` (coarse liveness). Everything
-  under `/api/*` is authenticated in `apps/worker/src/app.ts` before routing;
-  unauthorized requests get `401 UNAUTHORIZED`. No stack traces leak (Hono `onError`
+- The only **public** endpoints are `GET /api/health` (coarse liveness) and the customer code
+  portal below. Everything under `/api/*` is authenticated in `apps/worker/src/app.ts` before
+  routing; unauthorized requests get `401 UNAUTHORIZED`. No stack traces leak (Hono `onError`
   returns a structured `{ error: { code, message } }`).
 
-### Dev bypass requires explicit non-production configuration
+### Customer code portal — the one deliberately public read (`src/routes/portal.ts`)
 
+A buyer needs one number from one mailbox, so that is the whole surface.
+
+- It lives **outside** `/api/*`, and `src/index.ts` routes `/c/*` to the Hono app while every
+  other path still falls through to the SPA. Nothing about the portal may be moved under
+  `/api`, because that prefix is where the Access gate lives.
+- On the portal's own hostname (`PORTAL_ORIGIN`), `/c/*` is the **only** thing served: every other
+  path, including `/api/*`, is refused before it reaches a router. A public domain must not host a
+  login-less look-alike of the owner's app, and one fewer surface is one fewer thing to get wrong.
+  The mailbox hostname is unaffected — the rule is keyed on the host, not the path.
+- The credential is the URL: 192 random bits, one per sale, scoped to one alias, stored only as
+  a SHA-256 hash (`migrations/0013_portal_grants.sql`). A leak of D1 hands over no working link,
+  and there is no enumerable column to attack — a guessed token has a 1-in-2^192 chance.
+- It can answer four things: the newest code that arrived in the last 30 minutes in mail that
+  passed authentication, its age in seconds, its kind, and the address it arrived at. The
+  response key set is pinned by a test, so widening it is a deliberate edit rather than a
+  slip. Subject, body, attachments, links and message lists are never reachable through it.
+- Two rules the inbox does not apply, because nobody is reading context: a confidence floor of
+  `0.6` (Meta's footer postcode scores 0.47 and appears in *every* message it sends) and a
+  30-minute window. A `SPOOFED` message never yields a code whatever it claims — that number is
+  the payload a phisher wanted somebody to type somewhere.
+- Time-bounded, optionally look-capped, and revocable by a timestamp so the record of who saw
+  what outlives the sale. Responses are `no-store`, `noindex`, `frame-ancestors 'none'`, and the
+  page writes with `textContent` only.
+- Per-isolate throttle on page views and malformed tokens. Best-effort by design: it raises the
+  cost of scraping, the token is what actually defends the mailbox.
+- Logs carry the grant id and the code's age, never the token and never the code.
+
+### Dev bypass cannot reach production
 `apps/worker/src/env.ts` → `devAuthBypassEnabled()` returns true **only** when
 `DEV_AUTH_BYPASS=="true"` **and** `ENVIRONMENT` is one of `development/local/test`.
 Production config ships `ENVIRONMENT=production`, so the bypass is inert regardless of

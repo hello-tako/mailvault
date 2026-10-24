@@ -485,6 +485,99 @@ What that does *not* carry over, because browsers scope it per origin:
 To retire the old hostname: drop its route from `wrangler.jsonc`, redeploy, and remove
 `mail.omnipos.tech*` from the Access app's `self_hosted_domains`.
 
+### The customer code portal (`/c/:token`) — live on `code.tungjp.store`
+
+The owner sells accounts that sign up with these addresses, so a buyer needs one number from
+one mailbox and nothing else. `/c/:token` is that: one page, one number, no login. It is
+mounted outside `/api/*` on purpose — the Access gate that protects the mailbox is what keeps
+a stranger out of somebody else's mail, and a public path must never live under it.
+
+It could not live on the two mail hostnames: Access here covers *every* path on
+`mail.tungjp.store` and `mail.omnipos.tech` (verified: `/api/health`, `/c/test` and `/portal`
+all 302 to the Access login), so a buyer's link would stop at the owner's login screen. The
+`MailVault` Access app lists exactly those two domains and their `/*`, so a third subdomain of
+`tungjp.store` is outside it — which is the whole trick, and the reason the app-level check
+below matters.
+
+What is in place since 2026-10-13:
+
+| Piece | Value |
+| --- | --- |
+| DNS | `code.tungjp.store AAAA 100::` proxied, record `ef84e751a9f19ef6426388a7c824e7d5` |
+| Routing | zone route `code.tungjp.store/*` → `mail-vault`, route `f29f98d67cce4e57942eeea077138135` |
+| Var | `PORTAL_ORIGIN=https://code.tungjp.store` in `wrangler.jsonc` |
+| Table | `portal_grants` (migration `0013`), applied to the remote D1 |
+
+The hostname serves `/c/*` and nothing else: `/`, `/inbox`, `/api/health` and `/api/messages`
+all answer a plain `404` there, so the owner's SPA is never published on a public domain. On
+`code.tungjp.store/c/<bad token>` the portal's own "link không hợp lệ" page answers instead, and
+a minted link served `{"state":"waiting",…}` while two page views counted and the JSON poll did
+not. `mail.tungjp.store` and `mail.omnipos.tech` still answer 302 to Access — the guard is
+host-scoped, not path-scoped.
+
+Before the guard, `/api/messages` on the ungated host returned `401` rather than an Access
+redirect, which is the measurement that matters for the section further down: the Worker's own
+JWT check, not the Access front door, is what protects the mailbox there.
+
+**Why a route and not a custom domain, and what that costs.** This machine's `wrangler login`
+cannot see the `tungjp.store` zone: `GET /zones?name=…` comes back empty for it, so
+`wrangler deploy` ends with *"Could not find zone for …"* even though the upload itself already
+succeeded, and `POST /zones/{id}/workers/routes` answers *"No access to the specified
+resource."* Both the DNS record and the route were therefore created through the API:
+
+```bash
+# DNS (proxied AAAA pointing at the Worker)
+POST /zones/8fbc70474390f47397310aee5ba9a370/dns_records
+  { "name": "code", "type": "AAAA", "content": "100::", "proxied": true }
+
+# Route (the Worker is attached through the service-routes endpoint, not the zone one)
+PUT  /accounts/ef250a88911fd24073cb73d1c07e0218/workers/services/mail-vault/environments/production/routes
+  [ { "pattern": "code.tungjp.store/*", "zone_id": "8fbc70474390f47397310aee5ba9a370" } ]
+```
+
+Two consequences to keep in mind:
+
+- `code.tungjp.store` must stay **out** of `wrangler.jsonc`'s `routes`. Listing it there makes
+  every deploy fail on the zone lookup; leaving it out does not get it deleted — verified by
+  deploying with the entry removed and watching the hostname keep serving.
+- The same login cannot run `wrangler d1 migrations apply --remote` either (`7403`), so
+  migrations go through `POST /accounts/{id}/d1/database/{db}/query` and the `d1_migrations`
+  ledger row is inserted by hand. If this bothers you, the clean fix is a wrangler credential
+  that can actually read the zones — not more hand-built SQL.
+
+**Understand what the third hostname actually opens.** Routing points a domain at a Worker, not
+at a path — so without a deliberate rule, `code.tungjp.store` would also answer `POST /api/*`,
+with no Access in front of it, on the same Worker as the mailbox. Two things stop that. The first
+is `isPortalHost()` in `src/index.ts`: on the portal origin, every path except `/c/*` is refused
+before it reaches any router. The second is the one that would still hold if that guard were ever
+removed: `src/auth.ts` verifies the Access JWT's signature, issuer, audience and expiry on every
+`/api/*` call, and a request that arrives through an ungated hostname simply has no assertion to
+present, so it gets `401 UNAUTHORIZED` — measured that way before the guard went in.
+`DEV_AUTH_BYPASS` is inert in production and `checkCsrf` still rejects any Origin that is neither
+`APP_ORIGIN` nor the host being asked. If those layers ever stop being enough, the fix is a second
+small Worker on the public hostname with a read-only D1 binding and no API token at all — not an
+Access exception on a path.
+
+What a link can say: the newest code for its own alias that arrived in the last 30 minutes in
+mail that passed authentication, how old it is, and the address it arrived at. What it can
+never say: a subject, a body, an attachment, a link, a message list, or anything about another
+address.
+
+The credential model, since the token is the only thing standing between a buyer and a
+mailbox:
+
+- 192 random bits (`/c/:token`), stored **only** as a SHA-256 hash. The list API returns every
+  link's state and cannot rebuild any of them; the token appears in exactly one response.
+- Time-bounded (5 min … 7 days, default 1 h) and optionally look-capped. Polling the JSON
+  endpoint does not consume a look, so a cap of 5 means five customers, not five refreshes.
+- Revoking writes a timestamp rather than deleting, so the record of who was shown what
+  survives the sale. `GET /c/:token` is `no-store`, `noindex`, and `frame-ancestors 'none'`, so
+  the shop must send buyers to the link in a new tab instead of embedding it.
+- Per-isolate, best-effort throttle on page views and bad tokens. It raises the cost of
+  scraping; the token is the real defence.
+
+Links speak Vietnamese unless the URL says `?lang=en`.
+
 ### API token scope (least privilege)
 
 Create **one** User API Token.
@@ -631,3 +724,96 @@ page that never refreshes would hide.
 `wrangler` keeps previous Worker versions. `pnpm --filter @mailvault/worker deploy`
 again with an earlier build, or `wrangler rollback`, restores the previous Worker. D1
 migrations are additive; roll forward with a new migration rather than editing history.
+
+## Backups & disaster recovery
+
+Added 2026-10-24 (audit finding: the mail archive had no recovery layer of any kind).
+Four layers, each answering a different mistake:
+
+| Layer | Covers | Where it lives |
+|-------|--------|----------------|
+| D1 **Time Travel** (PITR) | a bad migration, a wrong UPDATE/DELETE, a corrupted database | inside Cloudflare, ~30 days (paid) / 7 (free) — on by default |
+| Weekly **D1 export** | a deleted database, an account-level mistake, anything older than Time Travel's window | `.github/workflows/backup.yml` → R2 bucket `mail-vault-backups/d1/`, 90-day retention |
+| R2 **Object Versioning** on `mail-vault-storage` | an accidental (or buggy) delete of raw `.eml`/parsed/attachment objects | inside the bucket — old versions survive a delete |
+| Ingest **DLQ** | a commit that keeps failing — the mail is safe in R2, the job is parked | queues `mail-ingest-dlq` and `mail-delivery-events-dlq` |
+
+### The CI credential (one-time)
+
+Both the deploy job in `ci.yml` and the backup workflow need an API token in GitHub
+secrets. Create a **second token** (My Profile → API Tokens), distinct from the Worker's
+runtime secret, with:
+
+- `Workers Scripts:Edit` (deploy)
+- `D1:Edit` (migrations in the deploy job, export + restore in the backup job)
+- `Queues:Edit` (deploy updates consumer config)
+- `R2:Edit`, scoped to the `mail-vault-backups` bucket only (backup writes)
+
+Put it in the repo's `CLOUDFLARE_API_TOKEN` secret (plus `CLOUDFLARE_ACCOUNT_ID`), and
+the deploy job stops being a reminder to run migrations by hand: it applies them, then
+ships exactly what `verify` built. Note the local `wrangler login` OAuth token **cannot**
+manage R2 buckets or read D1 Time Travel on this account (observed 2026-10-24, API error
+10000) — bucket creation in the backup workflow is therefore done by the CI token, not
+by hand from this machine.
+
+### One-time dashboard steps (cannot be done from this repo today)
+
+1. **Enable R2 Object Versioning**: dashboard → R2 → `mail-vault-storage` → Settings →
+   Object Versioning → Enable. (No wrangler command exists for it as of wrangler 4.152,
+   and this account's OAuth login cannot reach the R2 config API.)
+2. **Uptime watch** (two steps, because the app sits behind Access):
+   a. **Publish `/api/health` past Access.** Zero Trust → Access → Applications →
+      *Add an application* → Self-hosted, name it `MailVault health (public)`, with two
+      application domains: `mail.tungjp.store/api/health` and
+      `mail.omnipos.tech/api/health`, and exactly one policy: action **Bypass**,
+      include **Everyone**. Access routes the most specific application first, so the
+      health path becomes public while every other path keeps its login — matching what
+      the app itself already intends (the route is never gated in code and answers only
+      `ok/version/time` plus coarse `d1/r2/token` status words). Verify from a private
+      browser window: `https://mail.tungjp.store/api/health` must return JSON with
+      `"ok":true`, not a 302 to the Access login.
+   b. **Point a free external monitor** (UptimeRobot, Better Stack) at
+      `https://mail.tungjp.store/api/health`, 5-minute interval, email alerts. Everything
+      inside Cloudflare can be green while the Worker is not answering; this is the only
+      check that notices from outside.
+
+### Restore runbooks
+
+- **D1, minutes ago (Time Travel)**: `wrangler d1 time-travel info mail-vault-db --remote`
+  to find the bookmark, then `wrangler d1 time-travel restore mail-vault-db --timestamp
+  <ISO> --remote` (needs the CI token). Fork first (`--fork-name`) if the current state
+  must be kept for inspection.
+- **D1, from the weekly export**: download the newest `d1/mailvault-<date>.sql` from
+  `mail-vault-backups`, create a fresh database, `wrangler d1 execute <new-db> --file
+  mailvault-<date>.sql --remote`, paste its id into `wrangler.jsonc`, deploy.
+- **R2 object, deleted by mistake**: with versioning on, the dashboard's object view lists
+  prior versions; restore from there. Without versioning, the raw `.eml` of recently
+  arrived mail may still exist as a staged object named by its DLQ job.
+- **A dead-lettered ingest job**: the DLQ message carries R2 keys only. Read it from the
+  dashboard (Queues → mail-ingest-dlq), then replay the commit by hand: the staged
+  parsed JSON at `parsed/<messageId>.json` holds everything `commitIngest` needs.
+
+### Failure alerts (how the owner hears about any of this)
+
+The queue consumers record failure streaks (`src/lib/ops-alert.ts`): **3 failures within
+an hour** on either pipeline sends one email to the first `ALLOWED_EMAILS` address, from
+the first active alias of a sending-enabled domain — through this app's own
+`send_email` binding, at most **once per pipeline per day**. The email says which
+pipeline, the streak count, the last error, and points here. If sending itself is not
+configured, the alert degrades to an `ops_alert` metric (`outcome: skipped`) in the
+`mailvault-events` dataset rather than disappearing silently.
+
+### The automation around it (added 2026-10-24)
+
+- **Deploy**: the `deploy` job in `ci.yml` now runs on every merge to `main` (still
+  manually dispatchable), applies D1 migrations, then ships what `verify` built. The
+  `production` environment can be given reviewers in GitHub settings to require an
+  approval per deploy instead.
+- **Smoke**: `.github/workflows/smoke.yml` checks the live `/api/health` and the portal
+  hostname's 404 shape from outside Cloudflare, nightly.
+- **Dependencies**: `.github/dependabot.yml` raises weekly grouped PRs for npm and
+  actions.
+- **The hand-built resources**: `scripts/ops/` holds idempotent scripts for the two
+  resources a deploy cannot create — the `email.sending` queue subscription per zone and
+  the portal hostname's DNS + service route. Rebuilding from scratch is now a run of
+  that folder plus the runbooks above, not a re-reading of this document.
+

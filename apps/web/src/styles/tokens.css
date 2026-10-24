@@ -109,7 +109,9 @@
   --tabbar-h: 62px;
   --gutter-safe: calc(env(safe-area-inset-bottom, 0px) + var(--tabbar-h) + 16px);
   --tap: 44px;
-  --rail-w: 236px;
+  /* Wide enough for a domain name and its unread count, narrow enough that the reading pane
+     beside the list gets the column it needs. */
+  --rail-w: 208px;
 
   /* A field icon, themed, without a second element in the markup. */
   --icon-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238892a4' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.8-3.8'/%3E%3C/svg%3E");

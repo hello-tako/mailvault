@@ -28,7 +28,7 @@ export const VIEW_LABEL: Record<View, string> = {
  */
 export function queryFor(
   view: View,
-  over: { q?: string; aliasId?: string; domainId?: string; offset: number; limit: number; threaded: boolean },
+  over: { q?: string; aliasId?: string; domainId?: string; offset: number; limit: number; threaded: boolean; before?: string },
 ): MessageListQuery {
   return {
     filter: view === "unread" ? "unread" : "all",
@@ -43,6 +43,7 @@ export function queryFor(
     threaded: over.threaded,
     limit: over.limit,
     offset: over.offset,
+    before: over.before,
   };
 }
 

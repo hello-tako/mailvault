@@ -1,11 +1,14 @@
 import { expect, test } from "@playwright/test";
+import { openFold } from "./fixtures";
 
 /*
  * Rules are the one place the app decides something about mail without being asked, so the
  * UI has to make the two limits visible: a rule needs a condition, and it can only file.
+ * The form that writes one is folded away until asked for, so both tests open it first.
  */
 test("a rule needs something to match on before it can be added", async ({ page }) => {
   await page.goto("/#/aliases");
+  await openFold(page, "New rule");
   const card = page.locator(".card").filter({ hasText: /^Rules/ });
   const add = card.getByRole("button", { name: "Add rule" });
 
@@ -22,6 +25,7 @@ test("a rule needs something to match on before it can be added", async ({ page 
 
 test("creating, pausing and removing a rule, and nothing can delete mail", async ({ page }) => {
   await page.goto("/#/aliases");
+  await openFold(page, "New rule");
   const card = page.locator(".card").filter({ hasText: /^Rules/ });
   await card.getByLabel("Subject contains").fill("e2e digest");
   await card.getByLabel(/File it out of the inbox list/).check();

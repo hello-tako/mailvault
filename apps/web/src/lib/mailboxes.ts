@@ -41,13 +41,14 @@ export function selectableMailboxes<T extends { domainId: string; mailStatus: st
 
 /**
  * Where a message arrived, phrased for the row. The domain is what separates one mailbox
- * from another, so it is spelled out — but a labelled alias usually already says the
- * service, and inside one mailbox the domain is the thing being filtered on.
+ * from another, so it leads: a row whose tail is ellipsized then still says which mailbox it
+ * belongs to, which is the question the mixed list is asking. Inside one mailbox the domain is
+ * what was filtered on, so only the alias is said — and a bare address already carries both.
  */
 export function arrivalLabel(
   m: Pick<MessageSummary, "aliasLabel" | "aliasAddress" | "domainName">,
   scoped: boolean,
 ): string {
   if (!m.aliasLabel) return m.aliasAddress;
-  return scoped ? m.aliasLabel : `${m.aliasLabel} · ${m.domainName}`;
+  return scoped ? m.aliasLabel : `${m.domainName} · ${m.aliasLabel}`;
 }

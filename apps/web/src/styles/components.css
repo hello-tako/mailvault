@@ -148,6 +148,9 @@ input[type="checkbox"]:checked::after {
   background-position: 12px center;
   background-size: 16px 16px;
 }
+/* A `type="search"` field is drawn by the browser, not by this stylesheet: iOS gives it a
+   round inset field of its own, which would sit inside the one already drawn here. */
+input[type="search"] { appearance: none; -webkit-appearance: none; }
 
 /* ── Surfaces ──────────────────────────────────────────────────────────── */
 
@@ -253,14 +256,18 @@ input[type="checkbox"]:checked::after {
 /* ── Controls row ──────────────────────────────────────────────────────── */
 
 /*
- * Filters share lines instead of stacking one control per row: tabs and the mailbox picker
- * on the first line, search and its button on the next. A grid with fixed slots put every
- * control on its own row, which cost the list ~90px of chrome before any mail appeared.
+ * Filters share lines instead of stacking one control per row: tabs, the mailbox picker, the
+ * search field and the two view controls on as few lines as they can make. A grid with fixed
+ * slots put every control on its own row, which cost the list ~90px of chrome before any mail
+ * appeared.
  */
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: var(--space-2); }
 .toolbar .tabs { flex: 0 0 auto; }
 .toolbar .search { flex: 1 1 220px; min-width: 0; }
-.toolbar button[type="submit"] { flex: 0 0 auto; }
+/* The two controls that decide how the same mail is arranged, kept together at the end of the
+   line so they read as settings of the list rather than as two more filters. */
+.toolbar-tools { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.toolbar-tools .icon { width: 34px; padding-inline: 0; text-align: center; font-size: var(--text-base); line-height: 1; }
 /* The mailbox picker gets whatever width is left; a truncated domain name is still
    selectable, and it never pushes the search box onto a third line by itself. The small
    basis is deliberate: a flex line breaks on base sizes before anything shrinks, so a
@@ -327,38 +334,18 @@ input[type="checkbox"]:checked::after {
   .tabs button { padding: 0 8px; font-size: var(--text-xs); }
 }
 
-/* ── Monogram ──────────────────────────────────────────────────────────── */
-
-/*
- * A mail list is scanned by sender far more than by subject, and a wall of identical text
- * columns makes that slow. The monogram is generated from the name — no image, no network,
- * nothing that could be spoofed into showing a brand's real logo.
- */
-.mono-avatar {
-  display: grid;
-  place-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 11px;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: var(--av-ink, var(--text));
-  background: var(--av-bg, var(--surface-2));
-  border: 1px solid var(--av-line, var(--border));
-  flex: none;
-  user-select: none;
-}
-.mono-avatar--lg { width: 46px; height: 46px; border-radius: 14px; font-size: 17px; }
-
 /* ── Message list ──────────────────────────────────────────────────────── */
 
 /*
- * One markup, two layouts. The row is a grid of three: the mark, the text, the aside. Only
- * the text is a link, and its ::after reaches over the whole row — so the empty space is
- * tappable without putting a button inside an anchor, which is exactly what the code chip
- * needs to be. On a phone a row is a stacked card; from 700px the same elements form the
- * two-line mail row people scan, because that is how mail is read.
+ * One line on a desktop, two on a phone — the grammar every mail client settled on, because a
+ * list is scanned vertically and every extra line halves what fits on the screen. This row used
+ * to be three lines tall (sender, then `alias · domain`, then preview, then a chip), which put
+ * five messages where twenty of these fit.
+ *
+ * A row may say: who, what it says, when, and the few marks that change what opening it means.
+ * Everything else is a property of the message and waits inside it — the alias is said only when
+ * it tells two rows apart, and a status is a coloured word rather than a bordered pill so the
+ * line stays one line.
  */
 .msglist { list-style: none; margin: 0; padding: 0; }
 .msg { position: relative; border-bottom: 1px solid var(--border-soft); }
@@ -366,10 +353,18 @@ input[type="checkbox"]:checked::after {
 .msg-row {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0 12px;
-  align-items: start;
-  padding: 12px var(--space-2);
+  /* Phone first, as everywhere else in this file: who and when on the first line, what it says
+     on the second. Still half the height of the row this replaces. The tick and the star span
+     both lines rather than sitting on the first, so their finger-sized hit areas widen the row
+     no further than its own text does. */
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "check star sender time"
+    "check star line   line";
+  align-items: center;
+  gap: 1px 10px;
+  min-height: 0;
+  padding: 7px 12px;
   transition: background-color var(--dur-1) var(--ease-out);
 }
 .msg-row:hover { background: var(--surface-2); }
@@ -389,73 +384,104 @@ input[type="checkbox"]:checked::after {
 .msg[data-verdict="UNVERIFIED"]::after { background: var(--warn); }
 .msg[data-verdict="SPOOFED"]::after { background: var(--danger); }
 
-.msg-avatar { pointer-events: none; }
-.msg-link { position: relative; display: grid; gap: 1px; min-width: 0; color: inherit; }
+/* The controls sit above the link's overlay, so a tap on them is not also a tap on the row. */
+.msg-check, .star, .msg-code { position: relative; z-index: 1; }
+.msg-check { grid-area: check; display: flex; align-items: center; }
+.star { grid-area: star; min-height: 0; background: none; border: 0; padding: 8px 4px; line-height: 1; font-size: 15px; color: var(--faint); cursor: pointer; }
+.star.is-on { color: var(--warn); }
+.msg-sender {
+  grid-area: sender;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-line { grid-area: line; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* Deliberately not positioned: the overlay below then resolves against the row, which is what
+   makes the whole line — including the space with no text in it — the tap target. It takes the
+   line's remaining width so the code at its end lands in one column across rows. */
+.msg-link { flex: 1 1 auto; display: flex; align-items: baseline; gap: 8px; min-width: 0; color: inherit; }
 .msg-link::after { content: ""; position: absolute; inset: 0; z-index: 0; }
 .msg-link:hover { text-decoration: none; }
-.msg-link:hover .msg-subject { color: var(--text); }
-.msg-sender { min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.msg-subject { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Wrapping, not squeezing: a status pill cannot shrink below its own words, so
-   the line lets it fall to a row of its own rather than run past the card. */
-.msg-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
-.msg-alias {
-  flex: 0 1 auto;
-  min-width: 0;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Six characters is the point at which each of these stops being debris and starts being a
+   truncated word; below it the row shows a bracket where a mailbox name should be. */
+.msg-subject { flex: 0 1 auto; min-width: 6ch; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The snippet yields first: on a wide line it is the one text a row can be found without. */
+.msg-preview { flex: 0 4 auto; min-width: 0; color: var(--faint); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Below the width where a row becomes one line, the snippet goes altogether: the line has room
+   for what the message is and where it landed, and it is the least of the three. */
+@media (max-width: 699px) {
+  .msg-preview { display: none; }
 }
-.msg-preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--faint);
-  font-size: var(--text-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.msg-badges { margin-left: auto; flex: 0 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.msg-alias { flex: 0 2 auto; min-width: 6ch; color: var(--faint); font-family: var(--font-mono); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A rule's tag is the owner's own words and can be as long as they wrote it, so it gives way
+   rather than pushing the row past the edge of the screen. */
+.msg-tag { flex: 0 1 auto; min-width: 0; color: var(--faint); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-file { flex: 0 0 auto; color: var(--faint); font-size: var(--text-2xs); }
+.msg-warn { flex: 0 0 auto; color: var(--danger); font-size: var(--text-2xs); font-weight: 700; }
+.msg-state { flex: 0 0 auto; font-size: var(--text-2xs); font-weight: 650; }
+.msg-state.ok { color: var(--ok); }
+.msg-state.warn { color: var(--warn); }
+.msg-state.error { color: var(--danger); }
+.msg-state.muted { color: var(--faint); }
+.msg-time { grid-area: time; color: var(--faint); font-size: var(--text-2xs); font-weight: 600; white-space: nowrap; }
 
-/* The aside holds the two things you act on rather than read, so it sits above the link. */
-.msg-aside {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  justify-items: end;
-  align-content: start;
-  gap: 6px;
-  pointer-events: none;
-}
-.msg-time { color: var(--faint); font-size: var(--text-2xs); font-weight: 650; white-space: nowrap; }
-
-.code-chip {
-  pointer-events: auto;
+/* The code stays reachable from the list — that was the point of putting it there — but as a
+   word of monospaced text, not a bordered chip that forces the row to two lines. */
+.msg-code {
+  flex: 0 0 auto;
+  min-height: 0;
+  border: 0;
+  padding: 8px 0;
+  background: none;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   font-weight: 700;
   letter-spacing: 0.03em;
-  color: var(--text);
-  background: var(--accent-tint);
-  border: 1px solid var(--ok-line);
-  border-radius: 7px;
-  padding: 4px 8px;
-  min-height: 28px;
-  box-shadow: none;
+  color: var(--accent);
+  cursor: pointer;
 }
-.code-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); border-color: var(--accent); }
+.msg-code:hover { text-decoration: underline; }
+.msg-code.is-copied { color: var(--ok); }
 
-.msg.unread { background: color-mix(in srgb, var(--accent-tint) 55%, transparent); }
-.msg.unread .msg-subject { color: var(--text); font-weight: 700; }
-.msg.unread .msg-sender { font-weight: 800; }
+/*
+ * A finger on a phone: the app's 44px floor is written for a control that owns its own line,
+ * and inside a 56px mail row it would spend the whole row on the star alone. So the three
+ * controls in a row keep their text height and take the row's surrounding padding as their
+ * box instead — bigger to hit, and the row is thumb-height either way.
+ */
+@media (pointer: coarse) {
+  label.msg-check, .msg-row .star { padding: 11px 7px; margin: -11px -4px; }
+  .msg-code { padding: 11px 0; margin: -11px 0; }
+  /* A row that carries the code has spent its width on the thing you can act on. Where it
+     arrived is next to go — a two-letter address is not information — and the message itself
+     still spells it out. */
+  .msg-line:has(.msg-code) .msg-alias { display: none; }
+}
+
+/*
+ * Unread is a weight and a dot, not a painted band. The band was the single loudest thing on the
+ * screen — an inbox is mostly unread at first glance — and it spent the accent colour on state
+ * that the rail already carries.
+ */
+.msg.unread .msg-sender { color: var(--text); font-weight: 750; }
+.msg.unread .msg-subject { font-weight: 650; }
+.msg.unread .msg-sender::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 7px;
+  vertical-align: middle;
+}
 .msg.unread .msg-time { color: var(--accent); }
 /* The row whose message is open in the pane beside it. */
-.msg.is-active > .msg-row { background: color-mix(in srgb, var(--accent-tint) 80%, var(--surface)); }
-.msg.is-active .msg-subject,
-.msg.is-active .msg-sender { color: var(--text); }
+.msg.is-active > .msg-row { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.msg.is-active .msg-subject { color: var(--text); }
 
 /* A row that arrived while the tab was open announces itself once, then settles. */
 .msg.is-live > .msg-row { animation: sweep var(--dur-3) var(--ease-out) 1; }
@@ -464,28 +490,28 @@ input[type="checkbox"]:checked::after {
 /* ── Entity rows (aliases, domains) ────────────────────────────────────── */
 
 /*
- * One entity per block. The row's identity is always on screen and its actions are folded
- * until the row is engaged: five full-size buttons per alias made the list of things
- * busier than the things. One markup for both lists and both widths.
+ * One entity per line, and its actions folded until the line is engaged: five full-size
+ * buttons per alias made the list of things busier than the things. On a phone the identity
+ * and its counts share two lines — name and status, then address and how much has arrived —
+ * because four lines per alias meant three aliases per screen. One markup for both lists.
  */
-.entity { border-bottom: 1px solid var(--border-soft); padding: 12px var(--space-2); transition: background-color var(--dur-1) var(--ease-out); }
+.entity { border-bottom: 1px solid var(--border-soft); padding: 10px var(--space-2); transition: background-color var(--dur-1) var(--ease-out); }
 .entity:last-child { border-bottom: 0; }
 .entity:is(:hover, .is-open) { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
 .entity-summary { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 10px; cursor: pointer; }
-.entity-id { min-width: 0; display: grid; gap: 3px; }
-.entity-title { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
+.entity-id { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.entity-title { flex: 1 1 100%; display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
 .entity-name { font-weight: 750; letter-spacing: -0.01em; min-width: 0; overflow-wrap: anywhere; }
 .entity-addr { color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+/* The note is the owner's own sentence about an alias: worth its space when the row is open,
+   not worth a third of every row when it is not. */
 .entity-note {
+  flex: 1 1 100%;
   color: var(--faint);
   font-size: var(--text-sm);
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: none;
 }
-.entity.is-open .entity-note { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+.entity.is-open .entity-note { display: block; }
 .entity-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--text-2xs); font-weight: 600; color: var(--muted); }
 .entity-toggle {
   flex: 0 0 auto;
@@ -615,10 +641,6 @@ td { padding: 12px; border-bottom: 1px solid var(--border-soft); vertical-align:
 tr:last-child td { border-bottom: 0; }
 /* ── Reading surfaces ──────────────────────────────────────────────────── */
 
-/* Reading view: on a phone the actions belong under the addressing, not beside it. */
-.detail-head { display: flex; flex-direction: column; gap: var(--space-2); }
-.detail-head > :first-child { min-width: 0; flex: 1; }
-
 /*
  * An OTP is the only thing in a message worth displaying large, and the only thing worth
  * copying without selecting. It sits in a well so it reads as data, not as prose.
@@ -726,34 +748,26 @@ tr:last-child td { border-bottom: 0; }
 
 /* ── Mailboxes ─────────────────────────────────────────────────────────── */
 
-/* One domain, one box. The dashboard's leading content, because "where is my code from X"
-   is asked per domain, not across all of them. */
-.mailboxes { display: grid; gap: var(--space-1); grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); }
+/*
+ * One mailbox per line. The cards gave a single domain a quarter of the screen and left the
+ * rest of it empty; with several they wrapped into a grid whose numbers had to be compared
+ * sideways. A mailbox is a place you go, so it reads as a list of places.
+ */
+.mailboxes { display: grid; }
 .mailbox {
-  position: relative;
-  display: grid;
-  gap: 5px;
-  padding: 12px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: inherit;
   text-align: left;
-  box-shadow: var(--shadow-1), var(--edge);
-  overflow: hidden;
-  transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+  transition: background-color var(--dur-1) var(--ease-out);
 }
-.mailbox::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent), transparent 70%);
-  opacity: 0;
-  transition: opacity var(--dur-2) var(--ease-out);
-}
-.mailbox:hover { text-decoration: none; border-color: var(--border-strong); background: var(--surface-2); transform: translateY(-1px); }
-.mailbox:hover::before { opacity: 1; }
+.mailbox:last-child { border-bottom: 0; }
+.mailbox:hover { text-decoration: none; background: var(--surface-2); }
 .mailbox-name { font-weight: 750; font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .mailbox-facts { display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: var(--text-2xs); font-weight: 600; color: var(--muted); }
 
@@ -1016,10 +1030,10 @@ tr:last-child td { border-bottom: 0; }
 /* The conversation count rides the subject line: it is a property of the thread, not of
    the sender, and it is what stops three-message traffic reading as one loose message. */
 .msg-thread-count {
+  flex: 0 0 auto;
   display: inline-block;
   min-width: 17px;
   padding: 0 4px;
-  margin-right: 6px;
   border-radius: var(--radius-pill);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -1027,7 +1041,6 @@ tr:last-child td { border-bottom: 0; }
   font-size: var(--text-2xs);
   font-weight: 750;
   text-align: center;
-  vertical-align: 1px;
 }
 .msg.unread .msg-thread-count { background: var(--accent-tint); color: var(--accent); border-color: var(--ok-line); }
 
@@ -1114,7 +1127,6 @@ tr:last-child td { border-bottom: 0; }
    reports a verdict goes quiet on it — the row already says who it was sent to. */
 .msg.is-sent::after { background: var(--border); }
 .msg.is-sent .msg-sender { font-weight: 650; color: var(--muted); }
-.msg.is-sent .msg-avatar { opacity: 0.72; }
 
 /* ── Working over a selection, and reading a search back ────────────────── */
 
@@ -1138,6 +1150,20 @@ tr:last-child td { border-bottom: 0; }
 @media (max-width: 640px) {
   .bulk-actions { width: 100%; margin-left: 0; }
 }
+/* Nothing selected: this is the head row of the list, not a panel resting on top of it. The
+   border, blur and shadow belong to the floating bar a selection turns it into. */
+.bulkbar.is-idle {
+  position: static;
+  margin-top: 0;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: var(--surface);
+  backdrop-filter: none;
+  box-shadow: none;
+  animation: none;
+}
 
 .msg-row input[type="checkbox"], .bulkbar input[type="checkbox"] {
   width: 17px;
@@ -1147,27 +1173,7 @@ tr:last-child td { border-bottom: 0; }
   cursor: pointer;
 }
 /* A row of the selection, kept distinct from the row that is merely open. */
-.msg.is-selected > .msg-row { background: color-mix(in srgb, var(--accent-tint) 90%, var(--surface)); }
-
-/* The checkbox column only exists where a selection can be made, so the grid grows by one
-   track there and stays exactly as it was on a list that cannot select. */
-.msg-check { display: grid; place-items: center start; padding-top: 2px; }
-.msg.is-selectable .msg-row { grid-template-columns: auto auto minmax(0, 1fr) auto; }
-
-/* The star is the one mark with no automation behind it, so it is on the row rather than
-   behind a hover that a touch screen never gives you. */
-.star {
-  pointer-events: auto;
-  border: 0;
-  background: none;
-  padding: 0 2px;
-  font-size: 17px;
-  line-height: 1;
-  color: var(--faint);
-  cursor: pointer;
-}
-.star:hover { color: var(--muted); }
-.star.is-on { color: var(--warn); }
+.msg.is-selected > .msg-row { background: color-mix(in srgb, var(--accent-tint) 70%, transparent); }
 
 .tab-count {
   display: inline-block;
@@ -1216,6 +1222,17 @@ tr:last-child td { border-bottom: 0; }
 .pill.warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-tint); }
 .pill.warn::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
+/* A value the owner is about to copy out of the page: selectable, wide, and its own box. */
+.mono-box {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: var(--text-sm);
+  user-select: all;
+}
+
 /* One line per destination: this is where a send actually went, address by address. */
 .recip-status {
   list-style: none;
@@ -1228,3 +1245,14 @@ tr:last-child td { border-bottom: 0; }
 .recip-status li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .recip-status .addr { font-family: var(--font-mono); overflow-wrap: anywhere; }
 .recip-status .detail { flex-basis: 100%; }
+
+/* The explanatory second line inside an auth ribbon — quieter than the verdict itself. */
+.ribbon-note {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 12px;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

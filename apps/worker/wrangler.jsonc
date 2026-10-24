@@ -13,6 +13,9 @@
   "routes": [
     { "pattern": "mail.tungjp.store", "custom_domain": true },
     { "pattern": "mail.omnipos.tech", "custom_domain": true }
+    // The portal hostname `code.tungjp.store` is deliberately NOT listed: this login cannot see the
+    // `tungjp.store` zone, so wrangler can neither create nor keep a route for it. It is attached
+    // through the API — see DEPLOYMENT.md, "The customer code portal".
   ],
 
   "observability": {
@@ -30,6 +33,9 @@
     "CF_ACCOUNT_ID": "ef250a88911fd24073cb73d1c07e0218",
     "MAIL_WORKER_NAME": "mail-vault",
     "APP_ORIGIN": "https://mail.tungjp.store",
+    // The origin printed in a customer's code link: a hostname with no Access in front of it.
+    // See DEPLOYMENT.md, "The customer code portal".
+    "PORTAL_ORIGIN": "https://code.tungjp.store",
     "CF_ACCESS_TEAM_DOMAIN": "https://little-bar-8ffa.cloudflareaccess.com",
     "CF_ACCESS_AUD": "61f4423b34844e1a86c2b4680a77549acab6026bb3a0ed78af75d78ff00d10b4",
     "MAX_MESSAGE_BYTES": "20971520",
@@ -81,7 +87,11 @@
         "queue": "mail-delivery-events",
         "max_batch_size": 20,
         "max_batch_timeout": 5,
-        "max_retries": 3
+        "max_retries": 3,
+        // A persistent database failure must not end with delivery events silently
+        // disappearing after their retry budget — they park here, recoverable, exactly
+        // like ingest jobs do. Created 2026-10-24 alongside mail-ingest-dlq.
+        "dead_letter_queue": "mail-delivery-events-dlq"
       }
     ]
   },

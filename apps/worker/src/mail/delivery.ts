@@ -2,7 +2,7 @@ import { SendStatus } from "@mailvault/shared";
 import type { Env } from "../env";
 import { log } from "../lib/logging";
 import { writeMetric, Elapsed } from "../lib/metrics";
-import { applyDeliveryEvent } from "../db/recipients";
+import { refreshSendStatuses, writeRecipientStatement } from "../db/recipients";
 
 /**
  * Email Sending delivery events.
@@ -103,13 +103,16 @@ export function parseDeliveryEvent(raw: unknown): DeliveryEvent | null {
   };
 }
 
-/** The OUT row this provider message id belongs to, if this mailbox sent it. */
-async function findOutboundByProviderId(db: D1Database, providerMessageId: string): Promise<string | null> {
-  const row = await db
-    .prepare(`SELECT id FROM messages WHERE direction = 'OUT' AND provider_message_id = ?1 LIMIT 1`)
-    .bind(providerMessageId)
-    .first<{ id: string }>();
-  return row?.id ?? null;
+/** The OUT rows a batch of provider message ids belong to, if this mailbox sent them. */
+async function findOutboundByProviderIds(db: D1Database, ids: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  const placeholders = unique.map((_, i) => `?${i + 1}`).join(", ");
+  const { results } = await db
+    .prepare(`SELECT id, provider_message_id FROM messages WHERE direction = 'OUT' AND provider_message_id IN (${placeholders})`)
+    .bind(...unique)
+    .all<{ id: string; provider_message_id: string }>();
+  return new Map((results ?? []).map((r) => [r.provider_message_id, r.id]));
 }
 
 export interface DeliveryTally {
@@ -121,6 +124,10 @@ export interface DeliveryTally {
 /**
  * Apply a batch of delivery events. The caller acks per message, so this must distinguish a
  * database failure (worth retrying) from a record it simply cannot use (never worth it).
+ *
+ * One batch is four database round trips at most — the provider-id lookup, the recorded
+ * destinations, the upserts, the summary refresh — whatever the batch size, rather than
+ * two per event.
  */
 export async function consumeDeliveryEvents(
   bodies: unknown[],
@@ -129,20 +136,43 @@ export async function consumeDeliveryEvents(
 ): Promise<DeliveryTally> {
   const timer = new Elapsed();
   const tally: DeliveryTally = { applied: 0, unmatched: 0, malformed: 0 };
-  for (const body of bodies) {
-    const event = parseDeliveryEvent(body);
-    if (!event) {
-      tally.malformed += 1;
-      continue;
+
+  const events = bodies
+    .map((body) => parseDeliveryEvent(body))
+    .filter((e): e is DeliveryEvent => {
+      if (!e) tally.malformed += 1;
+      return !!e;
+    });
+  if (events.length > 0) {
+    const outbound = await findOutboundByProviderIds(db, events.map((e) => e.providerMessageId));
+    const placed = events.filter((e) => {
+      if (!outbound.has(e.providerMessageId)) {
+        tally.unmatched += 1;
+        return false;
+      }
+      return true;
+    });
+    if (placed.length > 0) {
+      const affected = [...new Set(placed.map((e) => outbound.get(e.providerMessageId)!))];
+      const placeholders = affected.map((_, i) => `?${i + 1}`).join(", ");
+      const { results } = await db
+        .prepare(`SELECT message_id, address, list FROM message_recipients WHERE message_id IN (${placeholders})`)
+        .bind(...affected)
+        .all<{ message_id: string; address: string; list: "to" | "cc" | "bcc" }>();
+      const known = new Map((results ?? []).map((r) => [`${r.message_id}|${r.address}`, r.list]));
+
+      await db.batch(
+        placed.map((e) => {
+          const messageId = outbound.get(e.providerMessageId)!;
+          const list = known.get(`${messageId}|${e.recipient}`) ?? "to";
+          return writeRecipientStatement(db, messageId, { address: e.recipient, list: "to", status: e.status, smtpCode: e.smtpCode, detail: e.detail }, list);
+        }),
+      );
+      await refreshSendStatuses(db, affected);
+      tally.applied = placed.length;
     }
-    const messageId = await findOutboundByProviderId(db, event.providerMessageId);
-    if (!messageId) {
-      tally.unmatched += 1;
-      continue;
-    }
-    await applyDeliveryEvent(db, messageId, event);
-    tally.applied += 1;
   }
+
   // Counts only: an SMTP line can name a recipient, and neither belongs in a metric or a log.
   writeMetric(env, "delivery", {
     outcome: tally.applied > 0 ? "applied" : tally.unmatched > 0 ? "unmatched" : "ignored",

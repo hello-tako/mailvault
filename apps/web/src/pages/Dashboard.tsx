@@ -72,11 +72,8 @@ export function Dashboard() {
                 <li>
                   <strong>{data.totalAliases}</strong> {t("dash.aliases")}
                 </li>
-                {unread > 0 ? (
-                  <li>
-                    <strong>{unread}</strong> {t("dash.unread")}
-                  </li>
-                ) : null}
+                {/* The unread count is never repeated here: the figure above is that number
+                    whenever there is one, and a second copy of it reads as a second fact. */}
                 {latest ? <li>{t("common.last", { at: relativeTime(latest) })}</li> : null}
               </ul>
             </div>

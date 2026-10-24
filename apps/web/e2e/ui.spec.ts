@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
+import { openFold, resetSeededAlias, resetSeededMail, SEEDED_ALIAS_ADDRESS } from "./fixtures";
 
 /*
  * Layout contract for the phone build. These assert the things that silently break a
@@ -133,17 +133,18 @@ test("phone: the inbox is a card list, searchable, and never shows a forged code
   const list = page.locator(".card--flush");
   // Trusted mail may surface its code; a spoofed row must show a warning instead of a
   // code the owner would paste somewhere.
-  await expect(list.locator(".badge.mono")).toHaveCount(2);
-  await expect(
-    list.locator(".msg", { hasText: "verification code" }).locator(".badge.mono"),
-  ).toHaveText("55905149");
-  await expect(list.locator(".msg", { hasText: "Urgent" }).locator(".badge.mono")).toHaveCount(0);
-  await expect(
-    list.locator(".msg", { hasText: "Urgent" }).getByText("unverified sender"),
-  ).toBeVisible();
+  await expect(list.locator(".msg-code")).toHaveCount(2);
+  await expect(list.locator(".msg", { hasText: "verification code" }).locator(".msg-code")).toHaveText(/55905149/);
+  await expect(list.locator(".msg", { hasText: "Urgent" }).locator(".msg-code")).toHaveCount(0);
+  await expect(list.locator(".msg", { hasText: "Urgent" }).getByText("unverified sender")).toBeVisible();
+
+  // Two lines and nothing else: the card this replaces was ~120px, and the row's height is
+  // what decides how much mail a phone screen holds.
+  const rowHeight = (await list.locator(".msg").first().boundingBox())?.height ?? 0;
+  expect(rowHeight, "a phone row stays under 68px").toBeLessThan(68);
 
   await page.locator("input.search").fill("digest");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.locator("input.search").press("Enter");
   await expect(page.locator(".msg")).toHaveCount(1);
 
   await page.screenshot({ path: "e2e-screens/inbox-list.png", fullPage: true });
@@ -170,6 +171,7 @@ test("phone: a folded magic link, a tracking wrapper and an ASCII table all read
   page,
 }) => {
   await page.goto(`/#/messages/${STRESS_MSG}`);
+  await openFold(page, "Verification links");
   const cards = page.locator(".link-card");
   await expect(cards).toHaveCount(4);
 
@@ -261,27 +263,23 @@ test("phone: the worker turns a new-mail ping into sender and subject, never a c
   expect(JSON.stringify(seen.note)).not.toContain("55905149");
 });
 
-test("desktop: the same inbox markup grids into a two-line mail row", async ({ page }) => {
+test("desktop: the same inbox markup grids into one-line rows", async ({ page }) => {
   await openInbox(page);
   await expect(page.locator(".msg")).toHaveCount(5);
   /*
-   * The row's grid is `.msg-row` (tick · mark · text · aside) since the code chip became a
-   * real button that cannot live inside an anchor, and the checkbox joined it so several rows
-   * can be picked up at once. What the contract cares about is unchanged: one markup that
-   * lays out as a compact multi-column row here and as a card on a phone.
+   * One markup, two shapes: on a phone a row is two short lines, here it is one line of five
+   * columns — tick, star, sender, the message itself, when. The contract is the shape and the
+   * height, because the height is the whole point: at ~120px a screen held four messages, and
+   * the grid is what lets the same rows hold twenty.
    */
-  const columns = await page
-    .locator(".msg")
-    .first()
-    .locator(".msg-row")
-    .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").length);
-  expect(columns).toBe(4);
-  const textCells = await page
-    .locator(".msg")
-    .first()
-    .locator(".msg-link")
-    .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").length);
-  expect(textCells).toBe(2);
+  const row = page.locator(".msg").first().locator(".msg-row");
+  const grid = await row.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { areas: s.gridTemplateAreas, columns: s.gridTemplateColumns.split(" ").length, height: el.getBoundingClientRect().height };
+  });
+  expect(grid.columns, "five columns: tick · star · sender · line · time").toBe(5);
+  expect(grid.areas).toContain('"check star sender line time"');
+  expect(Math.round(grid.height), "one row, not a card").toBeLessThanOrEqual(44);
   await page.screenshot({ path: "e2e-screens/inbox-desktop.png" });
 });
 

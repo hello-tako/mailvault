@@ -1,0 +1,70 @@
+name: Backup D1
+
+# The offline copy of the mailbox's metadata. Time Travel covers the last month inside
+# Cloudflare; this export is the layer that survives a deleted database, a bad migration,
+# or an account-level mistake — a plain .sql in a separate bucket, kept for 90 days.
+#
+# Needs the same CLOUDFLARE_API_TOKEN as the deploy job, with D1 read (export) and R2
+# write on the backups bucket. See DEPLOYMENT.md, "Backups & disaster recovery".
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC, past the watchdog hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-d1
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure the backups bucket exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.136.0 r2 bucket create mail-vault-backups || true
+        # Idempotent: a "bucket already exists" failure is the success case here.
+
+      - name: Export D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          DATE=$(date -u +%F)
+          npx --yes wrangler@4.136.0 d1 export mail-vault-db \
+            --remote --output="mailvault-$DATE.sql" --config apps/worker/wrangler.jsonc
+          ls -lh "mailvault-$DATE.sql"
+
+      - name: Upload to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          DATE=$(date -u +%F)
+          npx --yes wrangler@4.136.0 r2 object put "mail-vault-backups/d1/mailvault-$DATE.sql" \
+            --file="mailvault-$DATE.sql" --remote
+
+      # Retention without listing: the job itself is weekly, so every backup this repo has
+      # ever taken lives at a Monday's date. Delete the Mondays older than 90 days; the
+      # `|| true` covers dates that never had a backup (manual runs, missed weeks).
+      - name: Prune backups older than 90 days
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          CUTOFF=$(date -u -d "90 days ago" +%s)
+          for i in $(seq 13 52); do
+            D=$(date -u -d "monday -$i weeks" +%F)
+            [ "$(date -u -d "$D" +%s)" -lt "$CUTOFF" ] || continue
+            npx --yes wrangler@4.136.0 r2 object delete "mail-vault-backups/d1/mailvault-$D.sql" \
+              --remote --force || true
+          done
+          echo "pruned Mondays older than $(date -u -d "90 days ago" +%F)"

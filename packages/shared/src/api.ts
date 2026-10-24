@@ -77,6 +77,13 @@ export const MessageListQuerySchema = z.object({
   q: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
+  /**
+   * Keyset cursor for the plain (unsearched, unthreaded) list: `receivedAt|id` of the
+   * last row of the previous page. Page N then costs an index seek rather than a walk
+   * past everything before it, which is what OFFSET cannot help doing. Ignored whenever
+   * the query is a search or a threaded view — those keep offset semantics.
+   */
+  before: z.string().max(120).optional(),
 });
 export type MessageListQuery = z.infer<typeof MessageListQuerySchema>;
 

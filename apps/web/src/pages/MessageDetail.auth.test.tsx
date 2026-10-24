@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import {
   AuthVerdict,
@@ -75,6 +75,19 @@ function unverifiedMessage(id: string): MessageDetailData {
 describe("MessageDetail sender-auth content gating", () => {
   beforeEach(() => {
     mockState.message = unverifiedMessage("message-1");
+    // The reader asks Settings whether its panels start open; a deterministic store keeps
+    // that answer out of whatever the host environment happens to provide.
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("hides the body, extracted secrets and links until explicit reveal", () => {

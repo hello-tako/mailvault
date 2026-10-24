@@ -12,7 +12,20 @@ export default defineConfig({
       "/api": { target: process.env.API_TARGET ?? "http://localhost:8787", changeOrigin: true },
     },
   },
-  build: { outDir: "dist", emptyOutDir: true, sourcemap: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    // Ships without maps: the asset binding serves whatever is in dist, and a public
+    // .map of a private app is source disclosure for nobody's benefit.
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // React changes rarely and app code does; keeping them apart means an ordinary
+        // deploy re-downloads only the app half of the bundle.
+        manualChunks: { react: ["react", "react-dom"] },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

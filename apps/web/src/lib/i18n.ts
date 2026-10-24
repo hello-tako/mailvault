@@ -23,7 +23,6 @@ const STORAGE_KEY = "mailvault-lang";
 type Dict = Record<string, string>;
 
 export const en: Dict = {
-  "brand.tag": "Private domain mail",
   "nav.menu": "Main sections",
   "nav.dashboard": "Dashboard",
   "nav.domains": "Domains",
@@ -64,10 +63,6 @@ export const en: Dict = {
   "common.dash": "—",
   "common.error": "Something went wrong",
 
-  "live.on": "Listening",
-  "live.connecting": "Connecting…",
-  "live.off": "Not updating",
-  "live.hint": "This tab refreshes itself when mail arrives.",
 
   "theme.system": "Device",
   "theme.graphite": "Graphite",
@@ -94,7 +89,6 @@ export const en: Dict = {
   "dash.checking": "Checking…",
   "dash.domainsReceive": "of {n} domains receive mail",
   "dash.aliases": "aliases",
-  "dash.unread": "unread",
   "dash.stored": "stored",
   "dash.unitUnread": "unread",
   "dash.unitStored": "messages kept",
@@ -116,7 +110,6 @@ export const en: Dict = {
   "dash.notReceiving": "not receiving",
 
   "inbox.title": "Inbox",
-  "inbox.eyebrow": "Newest first",
   "inbox.clearFilters": "Clear filters",
   "inbox.all": "All",
   "inbox.unreadTab": "Unread",
@@ -135,6 +128,7 @@ export const en: Dict = {
   "inbox.noSubject": "(no subject)",
   "inbox.unverified": "⚠ unverified sender",
   "inbox.filedTag": "Filed by a rule",
+  "inbox.arrivedAt": "Arrived at",
   "inbox.codeTitle": "Detected code",
   "inbox.nAttachments": "{n} attachment(s)",
 
@@ -180,6 +174,9 @@ export const en: Dict = {
   "msg.showAnyway": "Show anyway ({n})",
   "msg.codes": "Codes",
   "msg.links": "Verification links",
+  "msg.authTitle": "How the sender was checked",
+  "msg.deliveryTitle": "Delivery",
+  "msg.unsubscribeTitle": "Unsubscribe",
   "msg.attachments": "Attachments",
   "msg.download": "Download",
   "msg.body": "Message",
@@ -193,7 +190,6 @@ export const en: Dict = {
   "msg.noBody": "This message has no readable body.",
 
   "dom.title": "Domains",
-  "dom.eyebrow": "Synced from Cloudflare",
   "dom.sync": "↻ Sync from Cloudflare",
   "dom.preflightAll": "Preflight all",
   "dom.verify": "Verify delivery",
@@ -310,7 +306,6 @@ export const en: Dict = {
   "alias.noSenders": "Nothing has arrived yet.",
 
   "aliases.title": "Aliases",
-  "aliases.eyebrow": "Pinned first",
   "aliases.search": "Search address, label or note…",
   "aliases.active": "Active",
   "aliases.archived": "Archived",
@@ -353,6 +348,39 @@ export const en: Dict = {
   "aliases.deleted": "Alias deleted — existing mail kept",
   "aliases.deletedPurged": "Alias disabled; message cleanup queued",
 
+  "portal.title": "Code links",
+  "portal.intro": "A link shows this address's newest verified code, then dies. Nothing else in the mailbox can be reached through it.",
+  "portal.newTitle": "Create a link",
+  "portal.ttl": "Valid for",
+  "portal.default": "default",
+  "portal.maxViews": "Looks allowed (blank = until it expires)",
+  "portal.labelField": "Note for this link (optional)",
+  "portal.labelExample": "e.g. order 1482",
+  "portal.create": "Create link",
+  "portal.creating": "Creating…",
+  "portal.createFail": "Could not create the link",
+  "portal.revokeFail": "Could not withdraw the link",
+  "portal.badViews": "Enter a whole number from 1 to {max}, or leave it blank",
+  "portal.onceTitle": "Copy this link now",
+  "portal.onceBody": "It appears once. Only a hashed form of it is stored, so it cannot be shown again — make a new one if it is lost.",
+  "portal.onceExpiry": "Valid until {at}.",
+  "portal.copyLink": "Copy link",
+  "portal.openLink": "Open it",
+  "portal.noLabel": "No note",
+  "portal.live": "Live",
+  "portal.expired": "Expired",
+  "portal.spent": "Used up",
+  "portal.revoked": "Withdrawn",
+  "portal.withdraw": "Withdraw",
+  "portal.expiresAt": "Expires {at}",
+  "portal.lastSeen": "Last opened {at}",
+  "portal.never": "Not opened yet",
+  "portal.viewsOpen": "{n} look(s)",
+  "portal.viewsCapped": "{n} of {max} looks used",
+  "portal.nMinutes": "{n} min",
+  "portal.nHours": "{n} h",
+  "portal.nDays": "{n} day(s)",
+
   "lp.empty": "Enter the name you want before the @",
   "lp.tooLong": "At most {max} characters (this is {n})",
   "lp.badChar": "“{c}” is not allowed — use letters a-z, numbers, dot, dash or underscore",
@@ -362,9 +390,8 @@ export const en: Dict = {
   "lp.reserved": "“{v}” is reserved for system addresses",
 
   "rule.title": "Rules",
-  "rule.introA":
-    "New mail that matches is filed for you. Filing takes it out of the inbox list — it is still there under ",
-  "rule.introB": ", and no rule can delete anything.",
+  "rule.intro": "Files matching mail out of the list you are reading. Nothing is deleted — it stays under Filed.",
+  "rule.newTitle": "New rule",
   "rule.sender": "Sender domain",
   "rule.subject": "Subject contains",
   "rule.tag": "Tag (optional)",
@@ -409,14 +436,18 @@ export const en: Dict = {
 
   "set.title": "Settings",
   "set.langTitle": "Language",
-  "set.langHint":
-    "The app starts in your browser's language and remembers what you choose here. Technical names (SPF, DKIM, MX, OTP) stay as they are, and an error that Cloudflare wrote is shown in its own words.",
+  "set.langHint": "The app starts in your browser's language. Technical names (SPF, DKIM, MX, OTP) and an error Cloudflare wrote stay in their own words.",
   "set.appearanceTitle": "Language and appearance",
   "set.langLabel": "Interface language",
   "set.themeTitle": "Light or dark",
   "set.themeHint":
     "It follows your device unless you choose here. Nothing else changes — same mail, same controls, nothing stored about the choice.",
   "set.themeLabel": "Appearance",
+  "set.insightsTitle": "Details beside a message",
+  "set.insightsHint": "The links a message carries, its authentication evidence, how a send was delivered. The message and any code in it always show.",
+  "set.insightsLabel": "Message details",
+  "set.insightsFold": "Fold them",
+  "set.insightsOpen": "Keep them open",
   "set.themeNow": "Showing",
   "set.notifTitle": "Notifications",
   "set.notifIntro":
@@ -623,7 +654,6 @@ export const en: Dict = {
 
   "msg.star": "Star",
   "msg.unstar": "Remove star",
-  "msg.starHint": "A star is only ever yours: no rule sets it and no rule clears it",
   "msg.sentFrom": "· sent from {address}",
   "msg.deliveryPerAddress": "Delivery to each address",
   "msg.noDeliveryYet": "No receiving server has answered for these addresses yet.",
@@ -651,13 +681,18 @@ export const en: Dict = {
   "search.op.before": "before",
   "search.chipRemove": "Remove this filter",
 
+  "msg.downloadEml": "Download original (.eml)",
+  "aliases.export": "Export",
+  "aliases.import": "Import",
+  "aliases.importEmpty": "That file holds no aliases",
+  "aliases.importReport": "Added {created} · already here {skipped} · refused {invalid}",
+
   "send.status.DEFERRED": "The other server is retrying",
   "send.status.REJECTED": "Refused",
   "send.status.COMPLAINED": "Reported as spam",
 };
 
 export const vi: Dict = {
-  "brand.tag": "Thư tên miền riêng",
   "nav.menu": "Các mục chính",
   "nav.dashboard": "Tổng quan",
   "nav.domains": "Tên miền",
@@ -698,10 +733,6 @@ export const vi: Dict = {
   "common.dash": "—",
   "common.error": "Đã xảy ra lỗi",
 
-  "live.on": "Đang theo dõi",
-  "live.connecting": "Đang kết nối…",
-  "live.off": "Không cập nhật",
-  "live.hint": "Tab này tự làm mới khi có thư mới.",
 
   "theme.system": "Theo máy",
   "theme.graphite": "Than chì",
@@ -728,7 +759,6 @@ export const vi: Dict = {
   "dash.checking": "Đang kiểm tra…",
   "dash.domainsReceive": "trên {n} tên miền đang nhận thư",
   "dash.aliases": "bí danh",
-  "dash.unread": "chưa đọc",
   "dash.stored": "đã lưu",
   "dash.unitUnread": "thư chưa đọc",
   "dash.unitStored": "thư đã lưu",
@@ -750,7 +780,6 @@ export const vi: Dict = {
   "dash.notReceiving": "không nhận thư",
 
   "inbox.title": "Hộp thư",
-  "inbox.eyebrow": "Mới nhất trước",
   "inbox.clearFilters": "Bỏ bộ lọc",
   "inbox.all": "Tất cả",
   "inbox.unreadTab": "Chưa đọc",
@@ -769,6 +798,7 @@ export const vi: Dict = {
   "inbox.noSubject": "(không chủ đề)",
   "inbox.unverified": "⚠ người gửi chưa xác minh",
   "inbox.filedTag": "Do quy tắc xếp loại",
+  "inbox.arrivedAt": "Nhận tại",
   "inbox.codeTitle": "Mã đã nhận diện",
   "inbox.nAttachments": "{n} tệp đính kèm",
 
@@ -815,6 +845,9 @@ export const vi: Dict = {
   "msg.showAnyway": "Vẫn hiển thị ({n})",
   "msg.codes": "Mã",
   "msg.links": "Liên kết xác minh",
+  "msg.authTitle": "Cách kiểm tra người gửi",
+  "msg.deliveryTitle": "Tình trạng giao thư",
+  "msg.unsubscribeTitle": "Hủy nhận thư",
   "msg.attachments": "Tệp đính kèm",
   "msg.download": "Tải về",
   "msg.body": "Nội dung",
@@ -828,7 +861,6 @@ export const vi: Dict = {
   "msg.noBody": "Thư này không có nội dung nào đọc được.",
 
   "dom.title": "Tên miền",
-  "dom.eyebrow": "Đồng bộ từ Cloudflare",
   "dom.sync": "↻ Đồng bộ từ Cloudflare",
   "dom.preflightAll": "Kiểm tra tất cả",
   "dom.verify": "Kiểm tra nhận thư",
@@ -947,7 +979,6 @@ export const vi: Dict = {
   "alias.noSenders": "Chưa có thư nào tới.",
 
   "aliases.title": "Bí danh",
-  "aliases.eyebrow": "Ưu tiên đã ghim",
   "aliases.search": "Tìm địa chỉ, nhãn hoặc ghi chú…",
   "aliases.active": "Đang dùng",
   "aliases.archived": "Đã lưu trữ",
@@ -991,6 +1022,39 @@ export const vi: Dict = {
   "aliases.deleted": "Đã xoá bí danh — thư cũ vẫn được giữ",
   "aliases.deletedPurged": "Đã tắt bí danh; việc xoá thư đã được đưa vào hàng đợi",
 
+  "portal.title": "Link nhận mã",
+  "portal.intro": "Mỗi link chỉ hiện mã mới nhất đã xác thực của địa chỉ này, rồi tự hết hạn. Không gì khác trong hộp thư mở được qua link.",
+  "portal.newTitle": "Tạo link mới",
+  "portal.ttl": "Hiệu lực trong",
+  "portal.default": "mặc định",
+  "portal.maxViews": "Số lần xem tối đa (để trống = tới khi hết hạn)",
+  "portal.labelField": "Ghi chú cho link (không bắt buộc)",
+  "portal.labelExample": "ví dụ: đơn 1482",
+  "portal.create": "Tạo link",
+  "portal.creating": "Đang tạo…",
+  "portal.createFail": "Không tạo được link",
+  "portal.revokeFail": "Không thu hồi được link",
+  "portal.badViews": "Nhập số nguyên từ 1 đến {max}, hoặc để trống",
+  "portal.onceTitle": "Sao chép link ngay",
+  "portal.onceBody": "Link chỉ hiện một lần. Hệ thống chỉ lưu bản băm nên không thể hiện lại — mất thì tạo link mới.",
+  "portal.onceExpiry": "Còn hiệu lực tới {at}.",
+  "portal.copyLink": "Sao chép link",
+  "portal.openLink": "Mở link",
+  "portal.noLabel": "Không ghi chú",
+  "portal.live": "Còn hiệu lực",
+  "portal.expired": "Hết hạn",
+  "portal.spent": "Đã xem đủ",
+  "portal.revoked": "Đã thu hồi",
+  "portal.withdraw": "Thu hồi",
+  "portal.expiresAt": "Hết hạn {at}",
+  "portal.lastSeen": "Mở lần cuối {at}",
+  "portal.never": "Chưa ai mở",
+  "portal.viewsOpen": "Đã xem {n} lần",
+  "portal.viewsCapped": "Đã xem {n} / {max} lần",
+  "portal.nMinutes": "{n} phút",
+  "portal.nHours": "{n} giờ",
+  "portal.nDays": "{n} ngày",
+
   "lp.empty": "Hãy nhập phần tên bạn muốn đứng trước dấu @",
   "lp.tooLong": "Tối đa {max} ký tự (bạn nhập {n})",
   "lp.badChar": "“{c}” không được phép — chỉ dùng a-z, số, dấu chấm, gạch ngang hoặc gạch dưới",
@@ -1000,9 +1064,8 @@ export const vi: Dict = {
   "lp.reserved": "“{v}” được dành riêng cho địa chỉ của hệ thống",
 
   "rule.title": "Quy tắc",
-  "rule.introA":
-    "Thư mới khớp điều kiện sẽ được xếp giúp bạn. Xếp chỉ rút thư khỏi danh sách đang xem — thư vẫn nằm ở mục ",
-  "rule.introB": ", và không quy tắc nào được xoá thư.",
+  "rule.intro": "Đưa thư khớp điều kiện ra khỏi danh sách bạn đang xem. Không thư nào bị xoá — tất cả vẫn ở mục Đã xếp.",
+  "rule.newTitle": "Quy tắc mới",
   "rule.sender": "Tên miền người gửi",
   "rule.subject": "Chủ đề chứa",
   "rule.tag": "Nhãn (không bắt buộc)",
@@ -1047,14 +1110,18 @@ export const vi: Dict = {
 
   "set.title": "Cài đặt",
   "set.langTitle": "Ngôn ngữ",
-  "set.langHint":
-    "Ứng dụng bắt đầu theo ngôn ngữ của trình duyệt và nhớ lựa chọn bạn đặt ở đây. Các tên kỹ thuật (SPF, DKIM, MX, OTP) giữ nguyên, và lỗi do Cloudflare viết thì hiển thị đúng nguyên văn của họ.",
+  "set.langHint": "Ứng dụng bắt đầu theo ngôn ngữ trình duyệt. Tên kỹ thuật (SPF, DKIM, MX, OTP) và lỗi của Cloudflare giữ đúng nguyên văn.",
   "set.appearanceTitle": "Ngôn ngữ và giao diện",
   "set.langLabel": "Ngôn ngữ giao diện",
   "set.themeTitle": "Sáng hay tối",
   "set.themeHint":
     "Mặc định theo máy của bạn, trừ khi bạn chọn ở đây. Không có gì khác thay đổi — vẫn là thư đó, vẫn các nút đó, và không lưu gì về lựa chọn này ra ngoài máy.",
   "set.themeLabel": "Giao diện",
+  "set.insightsTitle": "Chi tiết kèm theo thư",
+  "set.insightsHint": "Liên kết trong thư, bằng chứng xác thực người gửi, tình trạng giao thư. Nội dung thư và mã luôn hiển thị.",
+  "set.insightsLabel": "Chi tiết thư",
+  "set.insightsFold": "Gập lại",
+  "set.insightsOpen": "Luôn mở sẵn",
   "set.themeNow": "Đang hiển thị",
   "set.notifTitle": "Thông báo",
   "set.notifIntro":
@@ -1259,7 +1326,6 @@ export const vi: Dict = {
 
   "msg.star": "Đánh dấu",
   "msg.unstar": "Bỏ đánh dấu",
-  "msg.starHint": "Dấu sao chỉ do bạn đặt: không quy tắc nào tự thêm hay tự bỏ",
   "msg.sentFrom": "· gửi từ {address}",
   "msg.deliveryPerAddress": "Tình trạng giao đến từng địa chỉ",
   "msg.noDeliveryYet": "Chưa có máy chủ nào trả lời về những địa chỉ này.",
@@ -1286,6 +1352,12 @@ export const vi: Dict = {
   "search.op.after": "sau",
   "search.op.before": "trước",
   "search.chipRemove": "Bỏ bộ lọc này",
+
+  "msg.downloadEml": "Tải bản gốc (.eml)",
+  "aliases.export": "Xuất file",
+  "aliases.import": "Nhập file",
+  "aliases.importEmpty": "File này không chứa bí danh nào",
+  "aliases.importReport": "Đã thêm {created} · đã có sẵn {skipped} · bị từ chối {invalid}",
 
   "send.status.DEFERRED": "Máy chủ kia đang thử lại",
   "send.status.REJECTED": "Bị từ chối",

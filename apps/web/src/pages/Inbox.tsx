@@ -1,5 +1,5 @@
 import { withStepUp } from "../lib/passkeys";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { navigate, useRoute } from "../lib/router";
 import { useAsync } from "../lib/useAsync";
@@ -11,12 +11,15 @@ import { useMediaQuery } from "../lib/useMediaQuery";
 import { NEW_MAIL_EVENT } from "../lib/live";
 import { t } from "../lib/i18n";
 import { ConfirmDialog, EmptyState, ErrorBanner, SkeletonList } from "../components/ui";
-import { Composer } from "../components/Composer";
 import { MsgItem } from "../components/MessageRow";
 import { BulkBar } from "../components/mail/BulkBar";
 import { InboxToolbar } from "../components/mail/InboxToolbar";
-import { MessageDetail } from "./MessageDetail";
 import { BulkMessageAction, type MessageSummary } from "@mailvault/shared";
+
+// The pane's heavy parts — the reader and the composer — arrive on demand: the list is
+// what every visit opens on, and it should not carry the editor it may never need.
+const MessageDetail = lazy(() => import("./MessageDetail").then((m) => ({ default: m.MessageDetail })));
+const Composer = lazy(() => import("../components/Composer").then((m) => ({ default: m.Composer })));
 
 const PAGE = 50;
 
@@ -32,6 +35,11 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<View>("all");
+  // Paging is two modes over one pair of states. The plain list pages by keyset cursor
+  // (each entry remembers where its page starts and how many rows came before it, so
+  // "Newer" pops and the from/to line stays honest); a search or a threaded view ranks
+  // and partitions rows, so those keep offset pages exactly as before.
+  const [pages, setPages] = useState<{ cursor: string | null; shown: number }[]>([{ cursor: null, shown: 0 }]);
   const [offset, setOffset] = useState(0);
   const [composing, setComposing] = useState(false);
   // Conversation view is the way a mailbox reads; a search opts out, because matching one
@@ -44,24 +52,40 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   const wide = useMediaQuery("(min-width: 900px)");
   const openId = wide ? route.get("open") : null;
 
+  const cursorMode = !search && !grouped;
+  const page = pages[pages.length - 1]!;
+
   const query = useMemo(
     () =>
       queryFor(view, {
         q: search,
         aliasId,
         domainId,
-        offset,
+        offset: cursorMode ? 0 : offset,
+        before: cursorMode ? (page.cursor ?? undefined) : undefined,
         limit: PAGE,
         threaded: grouped && !search,
       }),
-    [view, search, aliasId, domainId, offset, grouped],
+    [view, search, aliasId, domainId, offset, grouped, cursorMode, page.cursor],
   );
 
-  const { data, error, loading, reload } = useAsync(() => api.listMessages(query), [query]);
-  const { data: counters, reload: reloadCounters } = useAsync(
-    () => api.messageCounters(domainId),
-    [domainId],
-  );
+  // The nudge is news about this list, so this is the one hook on the page that listens;
+  // the badges follow from the refetch, and everything else stays where it was.
+  const { data, error, loading, reload } = useAsync(() => api.listMessages(query), [query], { live: true });
+  const { data: counters, reload: reloadCounters } = useAsync(() => api.messageCounters(domainId), [domainId]);
+  // The installed app wears the unread count on its own icon. Where the browser does not
+  // support badges the call is simply absent, and nothing here waits on it.
+  useEffect(() => {
+    if (!counters) return;
+    const nav = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    const op =
+      counters.inbox.unread > 0 ? nav.setAppBadge?.(counters.inbox.unread) : nav.clearAppBadge?.();
+    if (op && typeof op.catch === "function") op.catch(() => undefined);
+  }, [counters]);
+
   const outbox = useOutbox();
   // The rail carries the mailbox list on a wide screen, so the page only asks for the domains
   // its own phone picker is going to draw.
@@ -82,16 +106,31 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
 
   useEffect(() => {
     setOffset(0);
+    setPages([{ cursor: null, shown: 0 }]);
   }, [view, search, aliasId, domainId]);
 
-  const items = data?.items ?? [];
+  // Flags the owner just moved show the move at once; the server's answer replaces the
+  // guess on the next refetch, and a failed call puts the row back by never confirming.
+  const [flagOverrides, setFlagOverrides] = useState<Record<string, { isRead?: boolean; starred?: boolean }>>({});
+  const items = useMemo(() => {
+    const raw = data?.items ?? [];
+    const merged =
+      Object.keys(flagOverrides).length === 0 ? raw : raw.map((m) => (flagOverrides[m.id] ? { ...m, ...flagOverrides[m.id] } : m));
+    // A tab whose filter is the flag itself (Unread, Starred) must honour the move too:
+    // un-starring inside Starred takes the row away now, not at the next refetch.
+    if (view === "unread") return merged.filter((m) => !m.isRead);
+    if (view === "starred") return merged.filter((m) => m.starred);
+    return merged;
+  }, [data, flagOverrides, view]);
   const orderedIds = useMemo(() => items.map((m) => m.id), [items]);
   const selection = useSelection(orderedIds);
 
   // A different list of rows is a different selection: keeping ids that are no longer on
-  // screen would let an invisible message be deleted by the next button press.
+  // screen would let an invisible message be deleted by the next button press. The same
+  // change retires any flag guess that belonged to the old page.
   useEffect(() => {
     selection.clear();
+    setFlagOverrides({});
   }, [query]);
 
   const openMessage = useCallback(
@@ -145,36 +184,64 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
       if (selection.count === 0 || busy) return;
       setBusy(true);
       setBulkError(null);
+      // Read and star say so immediately on the rows in front of the owner; the actions
+      // that move rows between lists still wait for the list itself to answer.
+      if (action === BulkMessageAction.Read || action === BulkMessageAction.Unread) {
+        const isRead = action === BulkMessageAction.Read;
+        setFlagOverrides((prev) => {
+          const next = { ...prev };
+          for (const id of selection.ids) next[id] = { ...next[id], isRead };
+          return next;
+        });
+      } else if (action === BulkMessageAction.Star || action === BulkMessageAction.Unstar) {
+        const starred = action === BulkMessageAction.Star;
+        setFlagOverrides((prev) => {
+          const next = { ...prev };
+          for (const id of selection.ids) next[id] = { ...next[id], starred };
+          return next;
+        });
+      }
       try {
         await (action === BulkMessageAction.Delete
           ? withStepUp(() => api.bulkMessages(selection.ids, action))
           : api.bulkMessages(selection.ids, action));
         selection.clear();
         setConfirmDelete(false);
-        reload();
+        reloadCounters();
+        if (
+          action === BulkMessageAction.Delete ||
+          action === BulkMessageAction.Archive ||
+          action === BulkMessageAction.Unarchive
+        ) {
+          reload();
+        }
       } catch (e) {
+        setFlagOverrides({});
         setBulkError(e instanceof Error ? e.message : t("bulk.failed"));
       } finally {
         setBusy(false);
       }
     },
-    [selection, busy, reload],
+    [selection, busy, reload, reloadCounters],
   );
 
   const toggleStar = useCallback(
     async (m: MessageSummary) => {
       setBulkError(null);
+      const starred = !m.starred;
+      setFlagOverrides((prev) => ({ ...prev, [m.id]: { ...prev[m.id], starred } }));
       try {
-        await api.bulkMessages(
-          [m.id],
-          m.starred ? BulkMessageAction.Unstar : BulkMessageAction.Star,
-        );
-        reload();
+        await api.bulkMessages([m.id], starred ? BulkMessageAction.Star : BulkMessageAction.Unstar);
+        reloadCounters();
       } catch (e) {
+        setFlagOverrides((prev) => {
+          const { [m.id]: _dropped, ...rest } = prev;
+          return rest;
+        });
         setBulkError(e instanceof Error ? e.message : t("bulk.failed"));
       }
     },
-    [reload],
+    [reloadCounters],
   );
 
   const step = useCallback(
@@ -195,14 +262,15 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
 
   const markRead = useCallback(
     async (id: string, isRead: boolean, advance: boolean) => {
+      setFlagOverrides((prev) => ({ ...prev, [id]: { ...prev[id], isRead } }));
       await api.setMessageRead(id, isRead).catch(() => undefined);
-      const idx = items.findIndex((m) => m.id === id);
-      reload();
+      reloadCounters();
       // Reading something and having to hunt for the next one is the friction split
       // inboxes exist to remove.
+      const idx = items.findIndex((m) => m.id === id);
       if (advance && isRead && items.length > 1) step(idx, 1);
     },
-    [items, reload, step],
+    [items, reloadCounters, step],
   );
 
   useEffect(() => {
@@ -269,8 +337,8 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   }, [openId]);
 
   const total = data?.total ?? 0;
-  const hasPrev = offset > 0;
-  const hasNext = data ? offset + PAGE < total : false;
+  const hasPrev = cursorMode ? pages.length > 1 : offset > 0;
+  const hasNext = cursorMode ? !!data?.nextCursor : data ? offset + PAGE < total : false;
 
   const scope = aliasId || domainId || search || view !== "all";
   // Inside one mailbox every row arrived at the same domain, so repeating it would be
@@ -337,20 +405,30 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
           </div>
           <div className="pager">
             <span className="faint" style={{ fontSize: 13 }}>
-              {t("inbox.showing", { from: offset + 1, to: Math.min(offset + PAGE, total), total })}
+              {t("inbox.showing", {
+                from: cursorMode ? page.shown + 1 : offset + 1,
+                to: cursorMode ? page.shown + items.length : Math.min(offset + PAGE, total),
+                total,
+              })}
             </span>
             <div className="row">
               <button
                 className="small"
                 disabled={!hasPrev}
-                onClick={() => setOffset(Math.max(0, offset - PAGE))}
+                onClick={() =>
+                  cursorMode ? setPages(pages.slice(0, -1)) : setOffset(Math.max(0, offset - PAGE))
+                }
               >
                 {t("inbox.newer")}
               </button>
               <button
                 className="small"
                 disabled={!hasNext}
-                onClick={() => setOffset(offset + PAGE)}
+                onClick={() => {
+                  if (!cursorMode) setOffset(offset + PAGE);
+                  else if (data?.nextCursor)
+                    setPages([...pages, { cursor: data.nextCursor, shown: page.shown + items.length }]);
+                }}
               >
                 {t("inbox.older")}
               </button>
@@ -364,28 +442,10 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
   return (
     <div className="page">
       <div className="page-head">
-        <div>
-          <span className="eyebrow">{t("inbox.eyebrow")}</span>
-          <h1>{t("inbox.title")}</h1>
-        </div>
+        {/* The title says what the screen is, and one button says what to do here. The rest of
+            the controls belong to the list they act on, so they sit with it. */}
+        <h1>{t("inbox.title")}</h1>
         <div className="actions">
-          {/* A view preference, not a filter: grouping changes how the same messages are
-              stacked, and it keeps its place beside the other view control. */}
-          <button
-            className="ghost small"
-            aria-pressed={grouped}
-            title={search ? t("inbox.groupOffWhileSearching") : t("inbox.groupHint")}
-            onClick={() => {
-              const next = !grouped;
-              setGrouped(next);
-              localStorage.setItem("mailvault-threaded", next ? "1" : "0");
-            }}
-          >
-            {t("inbox.groupConversations")}
-          </button>
-          <button className="ghost small" onClick={reload}>
-            {t("common.refresh")}
-          </button>
           {/* Reachable even when the server cannot send: a control that is simply greyed out
               tells nobody why, and the composer states the reason in its own words. */}
           <button
@@ -400,21 +460,23 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
       </div>
 
       {composing && (
-        <Composer
-          sendableAliases={outbox.aliases}
-          remaining={outbox.capabilities?.remaining ?? 0}
-          bindingMissing={outbox.capabilities?.bindingMissing}
-          onClose={() => setComposing(false)}
-          onSent={(outcome) => {
-            setComposing(false);
-            setView("sent");
-            reload();
-            outbox.reload();
-            // The row is the receipt: opening it shows exactly what was sent, so the owner
-            // never has to trust a toast that disappears.
-            if (wide) openMessage(outcome.id);
-          }}
-        />
+        <Suspense fallback={null}>
+          <Composer
+            sendableAliases={outbox.aliases}
+            remaining={outbox.capabilities?.remaining ?? 0}
+            bindingMissing={outbox.capabilities?.bindingMissing}
+            onClose={() => setComposing(false)}
+            onSent={(outcome) => {
+              setComposing(false);
+              setView("sent");
+              reload();
+              outbox.reload();
+              // The row is the receipt: opening it shows exactly what was sent, so the owner
+              // never has to trust a toast that disappears.
+              if (wide) openMessage(outcome.id);
+            }}
+          />
+        </Suspense>
       )}
 
       {error && <ErrorBanner message={error} />}
@@ -431,6 +493,12 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
         mailboxes={mailboxes}
         domainId={domainId}
         aliasId={aliasId}
+        grouped={grouped}
+        onGrouped={(next) => {
+          setGrouped(next);
+          localStorage.setItem("mailvault-threaded", next ? "1" : "0");
+        }}
+        onRefresh={reload}
         mailboxPicker={!wide}
       />
 
@@ -438,14 +506,16 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
         <div className="mail-split">
           <div className="mail-list">{list}</div>
           <div className="mail-pane" key={openId}>
-            <MessageDetail
-              id={openId}
-              pane
-              onClose={() => openMessage(null)}
-              onOpenMessage={openMessage}
-              onRead={(id) => void markRead(id, true, true)}
-              onDeleted={reload}
-            />
+            <Suspense fallback={null}>
+              <MessageDetail
+                id={openId}
+                pane
+                onClose={() => openMessage(null)}
+                onOpenMessage={openMessage}
+                onRead={(id) => void markRead(id, true, true)}
+                onDeleted={reload}
+              />
+            </Suspense>
           </div>
         </div>
       ) : (
