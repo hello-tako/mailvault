@@ -234,6 +234,10 @@ export const api = {
   recipients: (q: string) => request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
   compose: (input: ComposeInput, key: string) =>
     request<SendOutcome>("/outbox", sendingMutation(input, key)),
+  /** A failed send, tried again as a new message in the same thread (B5). */
+  resendMessage: (id: string) =>
+    request<SendOutcome>(`/messages/${encodeURIComponent(id)}/resend`, mutation()),
+
   reply: (id: string, input: ReplyInput, key: string) =>
     request<SendOutcome>(`/messages/${encodeURIComponent(id)}/reply`, sendingMutation(input, key)),
 

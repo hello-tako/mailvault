@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Env } from "../../src/env";
-import { notifyNewMail } from "../../src/live/hub";
+import { notifyNewMail, notifySendFailed } from "../../src/live/hub";
 
 /**
  * The hub is a Durable Object, which needs workerd to run. What is worth pinning here is
@@ -47,5 +47,20 @@ describe("notifyNewMail", () => {
 
   it("is a no-op where the binding does not exist, so local runs and tests do not need it", async () => {
     await expect(notifyNewMail(envWith({}))).resolves.toBeUndefined();
+  });
+});
+
+describe("notifySendFailed", () => {
+  it("nudges the same owner hubs, on the send-failed route", async () => {
+    const hub = fakeHub();
+    await notifySendFailed(envWith({ MAILBOX_HUB: hub.ns, ALLOWED_EMAILS: " Tung@Example.com " }));
+    expect(hub.nudged).toEqual(["tung@example.com POST /notify-send-failed"]);
+  });
+
+  it("survives an unavailable hub — a nudge must never break the delivery that sent it", async () => {
+    const hub = fakeHub(["tung@example.com"]);
+    await expect(
+      notifySendFailed(envWith({ MAILBOX_HUB: hub.ns, ALLOWED_EMAILS: "tung@example.com" })),
+    ).resolves.toBeUndefined();
   });
 });

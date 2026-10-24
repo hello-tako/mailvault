@@ -15,7 +15,7 @@ import { AuthBanner, AuthDetail, CodeCard, LinkCard, sortCodes, sortLinks } from
 import { Fold } from "../components/mail/Fold";
 import { DeliveryReport } from "../components/mail/DeliveryReport";
 import { UnsubscribeCard, parseUnsubscribe } from "../components/mail/UnsubscribeCard";
-import { AuthVerdict, BulkMessageAction, MessageDirection } from "@mailvault/shared";
+import { AuthVerdict, BulkMessageAction, MessageDirection, SendStatus } from "@mailvault/shared";
 
 // The editor is needed only when a reply starts; the reader should not carry it.
 const Composer = lazy(() => import("../components/Composer").then((m) => ({ default: m.Composer })));
@@ -55,6 +55,7 @@ export function MessageDetail({
   const [revealedUnverifiedId, setRevealedUnverifiedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmResend, setConfirmResend] = useState(false);
   const [replying, setReplying] = useState(false);
   const markedRef = useRef<string | null>(null);
 
@@ -141,6 +142,20 @@ export function MessageDetail({
       reload();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : t("bulk.failed"));
+    }
+  }
+
+  async function resend() {
+    try {
+      // The failed attempt stays as history; the send again is a new row in this thread
+      // with the same text and files, re-read from the vault by the Worker (B5).
+      await api.resendMessage(id);
+      setNotice(t("msg.resent"));
+      setConfirmResend(false);
+      reload();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : t("common.deleteFail"));
+      setConfirmResend(false);
     }
   }
 
@@ -373,6 +388,22 @@ export function MessageDetail({
             )
           ) : null}
 
+          {sent &&
+          (data.sendStatus === SendStatus.Failed ||
+            data.sendStatus === SendStatus.Bounced ||
+            data.sendStatus === SendStatus.Rejected ||
+            data.sendStatus === SendStatus.Suppressed) ? (
+            <div className="banner error mt">
+              <div>
+                <strong>{t("msg.resendNotice")}</strong>
+                {t("msg.resendBody")}
+              </div>
+              <button className="small" style={{ marginTop: 8 }} onClick={() => setConfirmResend(true)}>
+                {t("msg.resendAction")}
+              </button>
+            </div>
+          ) : null}
+
           {sent ? (
             <div className="mt">
               <Fold title={t("msg.deliveryTitle")} count={data.recipients.length} open={insights}>
@@ -456,6 +487,16 @@ export function MessageDetail({
           />
         </Suspense>
       ) : null}
+
+      {confirmResend && (
+        <ConfirmDialog
+          title={t("msg.resendTitle")}
+          confirmLabel={t("msg.resendConfirm")}
+          description={t("msg.resendBody")}
+          onConfirm={resend}
+          onClose={() => setConfirmResend(false)}
+        />
+      )}
 
       {confirmDelete && (
         <ConfirmDialog

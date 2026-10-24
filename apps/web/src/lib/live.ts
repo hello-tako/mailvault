@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 
 export const NEW_MAIL_EVENT = "mailvault:new-mail";
+export const SEND_FAILED_EVENT = "mailvault:send-failed";
 const PING_EVERY_MS = 25_000;
 const MAX_BACKOFF_MS = 30_000;
 
@@ -21,6 +22,16 @@ export function liveUrl(href: string): string {
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+/** `{"type":"send-failed"}` — a delivery the owner may still want to rescue. */
+export function isSendFailedMessage(raw: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null && (parsed as { type?: unknown }).type === "send-failed";
+  } catch {
+    return false;
+  }
 }
 
 /** Only `{"type":"new-mail"}` means mail; `hello`, `pong` and anything unparseable do not. */
@@ -97,8 +108,11 @@ export function connectLive(): LiveHandle {
       }, PING_EVERY_MS);
     };
     socket.onmessage = (event: MessageEvent) => {
-      if (typeof event.data === "string" && isNewMailMessage(event.data)) {
+      if (typeof event.data !== "string") return;
+      if (isNewMailMessage(event.data)) {
         window.dispatchEvent(new Event(NEW_MAIL_EVENT));
+      } else if (isSendFailedMessage(event.data)) {
+        window.dispatchEvent(new Event(SEND_FAILED_EVENT));
       }
     };
     socket.onclose = () => {

@@ -36,6 +36,13 @@ export class MailboxHub implements DurableObject {
       return new Response("ok", { status: 200 });
     }
 
+    // A send that failed to deliver is worth knowing about while there is still time to
+    // try another way — same discipline as new-mail: a type, and nothing else.
+    if (url.pathname === "/notify-send-failed") {
+      this.broadcast({ type: "send-failed" });
+      return new Response("ok", { status: 200 });
+    }
+
     return new Response("not found", { status: 404 });
   }
 
@@ -76,6 +83,27 @@ export class MailboxHub implements DurableObject {
       }
     }
   }
+}
+
+/**
+ * Nudge every configured owner's open tabs that a send failed to deliver. Same shape and
+ * same discipline as new-mail: a type on the socket, and nothing else — no address, no
+ * subject, no message id (section 6.4).
+ */
+export async function notifySendFailed(env: Env): Promise<void> {
+  const hub = env.MAILBOX_HUB;
+  if (!hub) return;
+  const owners = (env.ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const targets = owners.length > 0 ? owners : ["team"];
+  await Promise.allSettled(
+    targets.map((owner) => {
+      const stub = hub.get(hub.idFromName(owner));
+      return stub.fetch(new Request("https://hub/notify-send-failed", { method: "POST" }));
+    }),
+  );
 }
 
 /**
