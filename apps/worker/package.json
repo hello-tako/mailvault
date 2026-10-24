@@ -22,7 +22,7 @@
     "@mailvault/shared": "workspace:*",
     "@simplewebauthn/server": "^14.0.2",
     "hono": "^4.13.13",
-    "jose": "^5.9.6",
+    "jose": "^6.2.13",
     "mailauth": "7.1.1",
     "postal-mime": "^2.3.2",
     "tldts": "^6.1.86",
