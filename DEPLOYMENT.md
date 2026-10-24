@@ -733,8 +733,8 @@ Four layers, each answering a different mistake:
 | Layer | Covers | Where it lives |
 |-------|--------|----------------|
 | D1 **Time Travel** (PITR) | a bad migration, a wrong UPDATE/DELETE, a corrupted database | inside Cloudflare, ~30 days (paid) / 7 (free) — on by default |
-| Weekly **D1 export** | a deleted database, an account-level mistake, anything older than Time Travel's window | `.github/workflows/backup.yml` → R2 bucket `mail-vault-backups/d1/`, 90-day retention |
-| R2 **Object Versioning** on `mail-vault-storage` | an accidental (or buggy) delete of raw `.eml`/parsed/attachment objects | inside the bucket — old versions survive a delete |
+| Weekly **D1 offline dump** | a deleted database, an account-level mistake, anything older than Time Travel's window | `.github/workflows/backup.yml` → R2 bucket `mail-vault-backups/d1/`, 90-day retention. Built by `scripts/ops/d1-offline-backup.mjs` (plain SQL through the query API — `wrangler d1 export` refuses databases with FTS5 virtual tables, measured 2026-10-24). Restore: `sqlite3 <fresh.db> < mailvault-<date>.sql`; the dump ends with the migration-0003 backfill, so search is rebuilt too |
+| R2 objects in `mail-vault-storage` | an accidental (or buggy) delete of raw `.eml`/parsed/attachment objects | **no native versioning** — R2 has no S3-style Object Versioning (verified 2026-10-24: no dashboard toggle, no docs page), so this layer is procedure: objects are deleted only by explicit owner actions and by the durable-deletion jobs, and raw mail can be re-derived only from these explicit dumps' R2 keys list if ever needed |
 | Ingest **DLQ** | a commit that keeps failing — the mail is safe in R2, the job is parked | queues `mail-ingest-dlq` and `mail-delivery-events-dlq` |
 
 ### The CI credential (one-time)

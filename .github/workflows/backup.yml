@@ -33,14 +33,17 @@ jobs:
         run: npx --yes wrangler@4.136.0 r2 bucket create mail-vault-backups || true
         # Idempotent: a "bucket already exists" failure is the success case here.
 
+      # `wrangler d1 export` refuses databases with FTS5 virtual tables ("cannot export
+      # databases with virtual tables"), which this database has had since migration 0003 —
+      # the first real run on 2026-10-24 proved it. The dump is built through the ordinary
+      # query API instead: schema + one INSERT per row + the FTS backfill for restore.
       - name: Export D1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           DATE=$(date -u +%F)
-          npx --yes wrangler@4.136.0 d1 export mail-vault-db \
-            --remote --output="mailvault-$DATE.sql" --config apps/worker/wrangler.jsonc
+          node scripts/ops/d1-offline-backup.mjs --output="mailvault-$DATE.sql"
           ls -lh "mailvault-$DATE.sql"
 
       - name: Upload to R2
