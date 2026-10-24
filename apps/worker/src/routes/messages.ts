@@ -29,7 +29,9 @@ import {
 } from "../db/messages";
 import { AppError, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
-import { sendIdempotencyKey, sendReply } from "../mail/send";
+import { sendIdempotencyKey, sendReply,
+  resendMessage,
+} from "../mail/send";
 import { sanitizeFilename } from "../lib/filename";
 import { getObject } from "../storage/r2";
 import { searchMessageIds, semanticEnabled } from "../lib/semantic";
@@ -208,6 +210,26 @@ export const messagesRoute = new Hono<AppEnv>()
       throw new AppError(400, result.code, result.message);
     }
     log.info("reply_sent", { messageId: id, replyId: result.outcome.id, actor: actorOf(c).email });
+    return c.json(result.outcome, 201);
+  })
+
+  /**
+   * Send a failed message again (B5): a new row in the same thread with the same body and
+   * files, re-read from the vault. Only a delivery that actually failed is accepted.
+   */
+  .post("/api/messages/:id/resend", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const result = await resendMessage(
+      id,
+      c.env,
+      c.env.DB,
+      c.env.MAIL_BUCKET,
+    );
+    if (!result.ok) {
+      log.warn("resend_refused", { messageId: id, code: result.code });
+      throw new AppError(400, result.code, result.message);
+    }
+    log.info("resend_sent", { messageId: id, againId: result.outcome.id, actor: actorOf(c).email });
     return c.json(result.outcome, 201);
   })
 

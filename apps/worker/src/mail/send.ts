@@ -24,6 +24,8 @@ import {
   insertAttachments,
   insertMessage,
 } from "../db/messages";
+import { listRecipients } from "../db/recipients";
+import { getObject } from "../storage/r2";
 import type { InsertAttachmentInput, InsertMessageInput } from "../db/messages";
 import {
   beginOutboundR2Write,
@@ -94,6 +96,16 @@ async function dispatch(email: SendEmail, request: EmailMessageBuilder): Promise
 
 function megabytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A kept file goes back out as the request shape: base64, chunked so btoa never chokes. */
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 /** The request carries a file as base64; the vault keeps what that decodes to. */
@@ -639,6 +651,77 @@ function fail(code: string, message: string): SendResult {
  * appears in the conversation. Files are the exception, and the harmless one: a reply carries
  * whatever the owner attaches to it, under the same size and count rules as a new compose.
  */
+/**
+ * Send a failed message again (B5). The original stays exactly as it is — a resend is a
+ * new row in the same thread, written down before it goes like every other send — because
+ * "sent mail is mail": the attempt that bounced is history worth keeping. Only a delivery
+ * that actually failed may be retried; a delivered one would be a duplicate by definition.
+ */
+export async function resendMessage(
+  messageId: string,
+  env: Env,
+  db: D1Database,
+  bucket: R2Bucket,
+): Promise<SendResult> {
+  const row = await getMessageRow(db, messageId);
+  if (!row) return fail("NOT_FOUND", "That message is gone.");
+  if (row.direction !== MessageDirection.Out)
+    return fail("NOT_A_SEND", "Only a message you sent can be sent again.");
+  const terminalFailure = new Set<string>([
+    SendStatus.Failed,
+    SendStatus.Bounced,
+    SendStatus.Rejected,
+    SendStatus.Suppressed,
+  ]);
+  if (!terminalFailure.has(row.send_status ?? SendStatus.Unknown))
+    return fail("NOT_FAILED", "Only a delivery that actually failed can be sent again.");
+
+  // The body comes back from the vault's own copy, and attachments are re-read from R2
+  // server-side — nothing round-trips through the browser.
+  const parsed = row.parsed_r2_key
+    ? await getObject(bucket, row.parsed_r2_key)
+        .then((obj) => (obj ? (obj.json() as Promise<{ text?: string; html?: string }>) : null))
+        .catch(() => null)
+    : null;
+  const fileRows = await db
+    .prepare(`SELECT filename, content_type, r2_key FROM attachments WHERE message_id = ?1`)
+    .bind(messageId)
+    .all<{ filename: string; content_type: string | null; r2_key: string }>();
+  const attachments: ComposeAttachment[] = [];
+  for (const f of fileRows.results ?? []) {
+    const obj = await getObject(bucket, f.r2_key);
+    if (!obj) continue; // a file the vault no longer holds cannot ride along; the rest still go
+    attachments.push({
+      filename: f.filename,
+      type: f.content_type ?? "application/octet-stream",
+      content: encodeBase64(new Uint8Array(await obj.arrayBuffer())),
+    });
+  }
+
+  const recipients = await listRecipients(db, messageId);
+  const to = recipients.filter((r) => r.list === "to").map((r) => r.address);
+  const cc = recipients.filter((r) => r.list === "cc").map((r) => r.address);
+  const bcc = recipients.filter((r) => r.list === "bcc").map((r) => r.address);
+  if (to.length === 0)
+    return fail("NO_TARGET", "That message kept no recipient addresses to send to again.");
+
+  return sendOutbound(
+    {
+      fromAddress: row.alias_address ?? "",
+      to,
+      cc: cc.length ? cc : undefined,
+      bcc: bcc.length ? bcc : undefined,
+      subject: row.subject ?? "",
+      text: parsed?.text ?? "",
+      html: parsed?.html,
+      attachments,
+    },
+    env,
+    db,
+    bucket,
+  );
+}
+
 export async function sendReply(
   parentId: string,
   req: {

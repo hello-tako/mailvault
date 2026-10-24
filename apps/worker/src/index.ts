@@ -16,7 +16,7 @@ import { consumeDeliveryEvents } from "./mail/delivery";
 import { pushToAll } from "./push";
 import { Elapsed, writeMetric } from "./lib/metrics";
 import { recordOpsFailure } from "./lib/ops-alert";
-import { MailboxHub, notifyNewMail } from "./live/hub";
+import { MailboxHub, notifyNewMail, notifySendFailed } from "./live/hub";
 import { log } from "./lib/logging";
 import { runWatchdog } from "./provisioning/watchdog";
 import { drainDeletionJobs } from "./db/deletions";
@@ -219,12 +219,19 @@ async function consumeIngestBatch(
  */
 async function consumeDeliveryBatch(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
   try {
-    await consumeDeliveryEvents(
+    const tally = await consumeDeliveryEvents(
       batch.messages.map((m) => m.body),
       env,
       env.DB,
     );
     for (const message of batch.messages) message.ack();
+    // A delivery that failed is news while there is still time to resend it another way.
+    // Detached like the ingest notifications: a nudge must never delay the ack.
+    if (tally.failedMessages.length > 0) {
+      ctx.waitUntil(
+        notifySendFailed(env).catch(() => undefined),
+      );
+    }
   } catch (err) {
     writeMetric(env, "delivery", { outcome: "failed", reason: "db_error" });
     log.error("delivery_event_failed", {

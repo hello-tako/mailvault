@@ -119,6 +119,8 @@ export interface DeliveryTally {
   applied: number;
   unmatched: number;
   malformed: number;
+  /** Messages this batch left in a terminal failure — the caller turns these into a nudge. */
+  failedMessages: string[];
 }
 
 /**
@@ -135,7 +137,7 @@ export async function consumeDeliveryEvents(
   db: D1Database,
 ): Promise<DeliveryTally> {
   const timer = new Elapsed();
-  const tally: DeliveryTally = { applied: 0, unmatched: 0, malformed: 0 };
+  const tally: DeliveryTally = { applied: 0, unmatched: 0, malformed: 0, failedMessages: [] };
 
   const events = bodies
     .map((body) => parseDeliveryEvent(body))
@@ -170,6 +172,18 @@ export async function consumeDeliveryEvents(
       );
       await refreshSendStatuses(db, affected);
       tally.applied = placed.length;
+
+      // Which of the affected sends has just become a failure worth telling the owner
+      // about: ids only, read back after the summary refresh so the nudge reflects the
+      // row's settled state rather than a guess from the event kinds.
+      const marks = affected.map((_, i) => `?${i + 1}`).join(", ");
+      const failed = await db
+        .prepare(
+          `SELECT id FROM messages WHERE id IN (${marks}) AND send_status IN ('FAILED','BOUNCED','REJECTED','SUPPRESSED')`,
+        )
+        .bind(...affected)
+        .all<{ id: string }>();
+      tally.failedMessages = (failed.results ?? []).map((r) => r.id);
     }
   }
 

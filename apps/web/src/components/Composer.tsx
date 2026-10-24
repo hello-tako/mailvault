@@ -266,7 +266,11 @@ export function Composer({
   const [from, setFrom] = useState(replyTo?.aliasAddress ?? restoredDraft?.from ?? sendableAliases[0]?.address ?? "");
   const [to, setTo] = useState(restoredDraft?.to ?? "");
   const [cc, setCc] = useState(restoredDraft?.cc ?? "");
-  const [subject, setSubject] = useState(restoredDraft?.subject ?? "");
+  const [bcc, setBcc] = useState("");
+  // A reply starts from the subject it answers (the Worker adds "Re:" if it is missing);
+  // the owner can still reword it, and bring more people into the copy line.
+  const [subject, setSubject] = useState(replyTo?.subject ?? restoredDraft?.subject ?? "");
+  const [fromName, setFromName] = useState("");
   const [text, setText] = useState(() => (replyTo ? quoteOf(replyTo) : restoredDraft?.text ?? ""));
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -346,19 +350,29 @@ export function Composer({
     setError(null);
     const attachments = files.map((f) => ({ filename: f.name, type: f.type, content: f.content }));
     try {
+      const ccList = splitAddresses(cc);
+      const bccList = splitAddresses(bcc);
       const outcome = isReply
         ? await api.reply(
             replyTo.id,
-            { text, ...(attachments.length > 0 ? { attachments } : {}) },
+            {
+              text,
+              ...(ccList.length > 0 ? { cc: ccList } : {}),
+              ...(subject.trim() ? { subject: subject.trim() } : {}),
+              ...(fromName.trim() ? { fromName: fromName.trim() } : {}),
+              ...(attachments.length > 0 ? { attachments } : {}),
+            },
             sendKey.current,
           )
         : await api.compose(
             {
               fromAddress: from,
               to: splitAddresses(to),
-              ...(splitAddresses(cc).length > 0 ? { cc: splitAddresses(cc) } : {}),
+              ...(ccList.length > 0 ? { cc: ccList } : {}),
+              ...(bccList.length > 0 ? { bcc: bccList } : {}),
               subject,
               text,
+              ...(fromName.trim() ? { fromName: fromName.trim() } : {}),
               ...(attachments.length > 0 ? { attachments } : {}),
             },
             sendKey.current,
@@ -377,15 +391,36 @@ export function Composer({
     <Modal title={t(isReply ? "composer.replyTitle" : "composer.title")} onClose={onClose}>
       <form onSubmit={submit} className="composer">
         {isReply ? (
-          <div className="field">
-            <label>{t("composer.answerTo")}</label>
-            <div className="composer-static mono">{otherParty}</div>
-            <div className="field-hint">
-              {throughSubdomain
-                ? t("composer.leavesVia", { sending: leaving, alias: replyTo.aliasAddress })
-                : t("composer.fromRow", { alias: replyTo.aliasAddress })}
+          <>
+            <div className="field">
+              <label>{t("composer.answerTo")}</label>
+              <div className="composer-static mono">{otherParty}</div>
+              <div className="field-hint">
+                {throughSubdomain
+                  ? t("composer.leavesVia", { sending: leaving, alias: replyTo.aliasAddress })
+                  : t("composer.fromRow", { alias: replyTo.aliasAddress })}
+              </div>
             </div>
-          </div>
+            <details className="composer-cc">
+              <summary>{t("composer.cc")}</summary>
+              <RecipientField
+                id="reply-cc"
+                label={t("composer.cc")}
+                hint="someone-else@example.com"
+                value={cc}
+                onPick={setCc}
+              />
+            </details>
+            <div className="field">
+              <label htmlFor="reply-subject">{t("composer.subject")}</label>
+              <input
+                id="reply-subject"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                maxLength={998}
+              />
+            </div>
+          </>
         ) : (
           <>
             <div className="field">
@@ -420,13 +455,20 @@ export function Composer({
               <div className="field-hint">{t("composer.recipients", { n: recipientCount })}</div>
             ) : null}
             <details className="composer-cc">
-              <summary>{t("composer.cc")}</summary>
+              <summary>{t("composer.ccBcc")}</summary>
               <RecipientField
                 id="compose-cc"
                 label={t("composer.cc")}
                 hint="someone-else@example.com"
                 value={cc}
                 onPick={setCc}
+              />
+              <RecipientField
+                id="compose-bcc"
+                label={t("composer.bcc")}
+                hint="quiet-copy@example.com"
+                value={bcc}
+                onPick={setBcc}
               />
             </details>
             <div className="field">
@@ -436,6 +478,16 @@ export function Composer({
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
                 maxLength={998}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="compose-fromname">{t("composer.fromName")}</label>
+              <input
+                id="compose-fromname"
+                value={fromName}
+                onChange={(e) => setFromName(e.target.value)}
+                maxLength={120}
+                placeholder={t("composer.fromNameHint")}
               />
             </div>
           </>

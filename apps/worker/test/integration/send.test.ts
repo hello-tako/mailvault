@@ -6,6 +6,7 @@ import worker from "../../src/index";
 import { newId, nowIso } from "../../src/lib/util";
 import { newGrant } from "../../src/db/security";
 import { drainDeletionJobs } from "../../src/db/deletions";
+import { consumeDeliveryEvents } from "../../src/mail/delivery";
 import { getTestBindings, type TestBindings } from "./_mf";
 import { verifiedDkimPassFixture } from "./_auth-fixtures";
 
@@ -792,6 +793,84 @@ describe("sending files along with a message", () => {
     await drainDeletionJobs(TEST_ENV);
     expect(await BUCKET.get(key)).toBeNull();
   });
+describe("sending a failed message again (B5)", () => {
+  it("resends the same body and files as a new row after a bounce", async () => {
+    const { body } = await composeWith({
+      subject: "bounce me",
+      text: "try again",
+      attachments: [file("note.txt", new TextEncoder().encode("hello"), "text/plain")],
+    });
+    expect(body.id).toBeTruthy();
+    await DB.prepare(`UPDATE messages SET send_status = 'BOUNCED' WHERE id = ?1`).bind(body.id).run();
+    const before = sent.length;
+
+    const res = await worker.fetch(
+      req(`/api/messages/${body.id}/resend`, { method: "POST", headers: H }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(201);
+    const again = await j(res);
+    expect(again.id).not.toBe(body.id);
+    expect(sent.length).toBe(before + 1);
+    expect(sent[sent.length - 1].subject).toBe("bounce me");
+    const files = await DB.prepare(`SELECT count(*) AS n FROM attachments WHERE message_id = ?1`).bind(again.id).first<any>();
+    expect(files.n).toBe(1);
+    // The failed attempt stays as history.
+    const old = await DB.prepare(`SELECT send_status FROM messages WHERE id = ?1`).bind(body.id).first<any>();
+    expect(old.send_status).toBe("BOUNCED");
+  });
+
+  it("refuses a resend while delivery is still in flight", async () => {
+    const { body } = await composeWith({ subject: "still queued" });
+    const res = await worker.fetch(
+      req(`/api/messages/${body.id}/resend`, { method: "POST", headers: H }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(400);
+    expect((await j(res)).error.code).toBe("NOT_FAILED");
+  });
+
+  it("refuses to resend mail that arrived rather than left", async () => {
+    const { body } = await composeWith({ subject: "becomes inbound" });
+    await DB.prepare(`UPDATE messages SET direction = 'IN', send_status = NULL WHERE id = ?1`).bind(body.id).run();
+    const res = await worker.fetch(
+      req(`/api/messages/${body.id}/resend`, { method: "POST", headers: H }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(400);
+    expect((await j(res)).error.code).toBe("NOT_A_SEND");
+  });
+
+  it("names a send the delivery events just failed, for the nudge", async () => {
+    const { body } = await composeWith({ subject: "tally bounce" });
+    const row = await DB.prepare(`SELECT provider_message_id AS p FROM messages WHERE id = ?1`).bind(body.id).first<any>();
+    const tally = await consumeDeliveryEvents(
+      [
+        {
+          type: "cf.email.sending.message.bounced",
+          source: { type: "email.sending", zoneId: "z", domain: "send.example.com" },
+          payload: {
+            eventId: `e-${body.id}`,
+            messageId: row.p,
+            sender: "x@send.example.com",
+            recipient: "a@b.example",
+            subject: "tally bounce",
+            terminal: true,
+            delivery: { status: "bounced", provider: "gmail", smtpStatusCode: "550", smtpResponse: "550 no" },
+          },
+          metadata: { eventTimestamp: new Date().toISOString() },
+        },
+      ],
+      TEST_ENV,
+      DB,
+    );
+    expect(tally.failedMessages).toContain(body.id);
+    const after = await DB.prepare(`SELECT send_status FROM messages WHERE id = ?1`).bind(body.id).first<any>();
+    expect(after.send_status).toBe("BOUNCED");
+  });
 });
 
 describe("listing received and sent mail", () => {
@@ -873,4 +952,5 @@ describe("listing received and sent mail", () => {
     expect(await row(outcome.id)).toBeFalsy();
     expect(await BUCKET.get(stored.raw_r2_key)).toBeNull();
   });
+});
 });

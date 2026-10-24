@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { navigate } from "../lib/router";
-import { NEW_MAIL_EVENT } from "../lib/live";
+import { NEW_MAIL_EVENT, SEND_FAILED_EVENT } from "../lib/live";
 import { t } from "../lib/i18n";
 
 /**
@@ -14,6 +14,7 @@ import { t } from "../lib/i18n";
  */
 export function NewMailToast() {
   const [count, setCount] = useState<number | null>(null);
+  const [sendFailed, setSendFailed] = useState(false);
   const baseline = useRef<number | null>(null);
 
   useEffect(() => {
@@ -44,18 +45,55 @@ export function NewMailToast() {
     };
   }, []);
 
+  // A failed delivery is a notice with a deadline: the address may still be fixable by
+  // hand while the reason is fresh. Content stays behind the authenticated Sent view.
+  useEffect(() => {
+    const onSendFailed = () => setSendFailed(true);
+    window.addEventListener(SEND_FAILED_EVENT, onSendFailed);
+    return () => window.removeEventListener(SEND_FAILED_EVENT, onSendFailed);
+  }, []);
+  useEffect(() => {
+    if (!sendFailed) return;
+    const timer = setTimeout(() => setSendFailed(false), 8000);
+    return () => clearTimeout(timer);
+  }, [sendFailed]);
+
   useEffect(() => {
     if (count === null) return;
     const timer = setTimeout(() => setCount(null), 8000);
     return () => clearTimeout(timer);
   }, [count]);
 
-  if (count === null) return null;
+  if (count === null && !sendFailed) return null;
 
   return (
     <div className="toast-host" role="status">
       <div className="toast">
-        <span className="msg-count">{t("toast.newMail", { n: count })}</span>
+        {sendFailed ? (
+          <>
+            <span className="msg-count">{t("toast.sendFailed")}</span>
+            <span className="actions">
+              <button
+                className="small primary"
+                onClick={() => {
+                  setSendFailed(false);
+                  navigate("/inbox");
+                }}
+              >
+                {t("toast.viewSent")}
+              </button>
+              <button
+                className="ghost small"
+                aria-label={t("common.close")}
+                onClick={() => setSendFailed(false)}
+              >
+                ✕
+              </button>
+            </span>
+          </>
+        ) : (
+          <>
+        <span className="msg-count">{t("toast.newMail", { n: count ?? 0 })}</span>
         <span className="actions">
           <button
             className="small primary"
@@ -70,6 +108,8 @@ export function NewMailToast() {
             ✕
           </button>
         </span>
+          </>
+        )}
       </div>
     </div>
   );
