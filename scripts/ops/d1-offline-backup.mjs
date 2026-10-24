@@ -33,11 +33,15 @@ const workerDir = fileURLToPath(new URL("../../apps/worker/", import.meta.url));
 const config = local ? "wrangler.dev.jsonc" : "wrangler.jsonc";
 
 /** One D1 query through wrangler, parsed from its --json envelope. */
+// GitHub runners have npx but no pnpm; the owner's machine has the repo's pinned pnpm.
+const [runner, runnerArgs] = process.env.CI
+  ? ["npx", ["--yes", "wrangler@4.136.0"]]
+  : ["pnpm", ["exec", "wrangler"]];
 function query(sql) {
   const res = spawnSync(
-    "pnpm",
+    runner,
     [
-      "exec", "wrangler", "d1", "execute", "mail-vault-db",
+      ...runnerArgs, "d1", "execute", "mail-vault-db",
       local ? "--local" : "--remote",
       "--config", config,
       "--command", sql,
@@ -46,7 +50,7 @@ function query(sql) {
     { cwd: workerDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
   );
   if (res.status !== 0) {
-    console.error(res.stdout);
+    console.error(res.error ?? res.stdout);
     console.error(res.stderr);
     throw new Error(`D1 query failed: ${sql.slice(0, 80)}…`);
   }
