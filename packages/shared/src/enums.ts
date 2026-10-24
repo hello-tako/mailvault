@@ -54,6 +54,12 @@ export const ConflictType = {
   CatchAll: "CATCH_ALL",
   /** Config was changed outside MailVault so mail no longer reaches its Worker. */
   Drift: "DRIFT",
+  /**
+   * The zone looks perfect inside Cloudflare, but a public resolver cannot see the domain
+   * or its MX at all — the blind spot of a lapsed registration (`loiyeuthuong.org`, 2026-10:
+   * zone active, routing healthy, registration in redemptionPeriod → NXDOMAIN).
+   */
+  DnsUnresolvable: "DNS_UNRESOLVABLE",
 } as const;
 export type ConflictType = (typeof ConflictType)[keyof typeof ConflictType];
 

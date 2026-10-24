@@ -22,8 +22,15 @@ import { badRequest, notFound, AppError } from "../lib/errors";
 import { actorOf, asApiError, cfClient, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
 import { verifyDeliveryPath } from "../provisioning/preflight";
+import { getSetting, setSetting } from "../db/settings";
 
 const ZoneIdParam = z.object({ id: z.string().min(1) });
+
+/** The auto-provision switch: "1" means a Sync may itself provision newly discovered zones
+ * that preflight clears as READY_TO_PROVISION — never anything with a conflict, because
+ * provisionDomain refuses those without the owner's explicit takeover confirmations. */
+const AUTO_PROVISION_KEY = "autoProvisionCleanZones";
+const AutoProvisionBody = z.object({ enabled: z.boolean() });
 
 /** Provision/preflight bodies accept explicit, dangerous-action takeover confirmations. */
 const ProvisionBodySchema = DomainIdsBodySchema.extend({
@@ -72,6 +79,25 @@ async function authorizeTakeovers(
 export const domainsRoute = new Hono<AppEnv>()
   .get("/api/domains", async (c) => c.json({ items: await listDomains(c.env.DB) }))
 
+  /** Opt-in: Sync may itself enable mail on newly discovered zones that preflight clears. */
+  .get("/api/domains/auto-provision", async (c) => {
+    try {
+      return c.json({ enabled: (await getSetting(c.env.DB, AUTO_PROVISION_KEY)) === "1" });
+    } catch (err) {
+      throw asApiError(err);
+    }
+  })
+  .put("/api/domains/auto-provision", async (c) => {
+    try {
+      const body = await readJson(c, AutoProvisionBody);
+      await setSetting(c.env.DB, AUTO_PROVISION_KEY, body.enabled ? "1" : "0");
+      log.info("auto_provision_setting", { actor: actorOf(c).email, enabled: body.enabled });
+      return c.json({ enabled: body.enabled });
+    } catch (err) {
+      throw asApiError(err);
+    }
+  })
+
   /** Discovery is read-only against Cloudflare — it never mutates a zone (section 9). */
   .post("/api/domains/sync", async (c) => {
     try {
@@ -87,7 +113,33 @@ export const domainsRoute = new Hono<AppEnv>()
       }));
       await upsertDiscoveredZones(c.env.DB, discovered);
       log.info("domains_synced", { actor: actorOf(c).email, discovered: discovered.length });
-      return c.json({ discovered: discovered.length, items: await listDomains(c.env.DB) });
+      let autoProvisioned: string[] = [];
+      if ((await getSetting(c.env.DB, AUTO_PROVISION_KEY)) === "1") {
+        // Only zones this sync brought in as DISCOVERED are candidates — a row in any other
+        // state is history the owner already shaped. provisionDomain re-runs its own
+        // preflight and refuses anything short of clean, so this can never take over an MX
+        // or a catch-all; those still wait for the explicit button with its confirmations.
+        const fresh = await c.env.DB
+          .prepare(`SELECT cloudflare_zone_id AS id FROM domains WHERE mail_status = 'DISCOVERED'`)
+          .all<{ id: string }>();
+        const zoneIds = (fresh.results ?? []).map((r) => r.id);
+        if (zoneIds.length) {
+          const workerName = requireWorkerName(c.env);
+          const outcomes = await provisionMany(c.env.DB, client, zoneIds, workerName, {
+            denyDomains: domainDenylist(c.env),
+          });
+          autoProvisioned = outcomes.filter((o) => o.ok).map((o) => o.name);
+          log.info("domains_auto_provisioned", {
+            attempted: zoneIds.length,
+            ok: autoProvisioned.length,
+          });
+        }
+      }
+      return c.json({
+        discovered: discovered.length,
+        autoProvisioned,
+        items: await listDomains(c.env.DB),
+      });
     } catch (err) {
       throw asApiError(err);
     }

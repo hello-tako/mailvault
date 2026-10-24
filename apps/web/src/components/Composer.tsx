@@ -435,7 +435,7 @@ export function Composer({
                 id="compose-subject"
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                maxLength={200}
+                maxLength={998}
               />
             </div>
           </>

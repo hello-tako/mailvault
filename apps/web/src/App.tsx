@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, matchRoute, useRoute } from "./lib/router";
-import { connectLive } from "./lib/live";
+import { NEW_MAIL_EVENT, connectLive } from "./lib/live";
+import { api } from "./lib/api";
 import { t, useLang } from "./lib/i18n";
 import { useTheme } from "./lib/theme";
 import { IconAlias, IconGauge, IconGlobe, IconInbox, IconSearch, IconSliders, VaultMark } from "./components/Icons";
@@ -66,6 +67,30 @@ export function App() {
   const onInbox = path === "/inbox";
 
   useEffect(() => connectLive().stop, []);
+
+  // The unread count is the app's, not one screen's: a badge set only while the Inbox is
+  // mounted goes stale the moment the owner opens Settings. Refreshed on load and on every
+  // new-mail nudge; a failed count is cosmetic, never worth an error banner.
+  useEffect(() => {
+    let stopped = false;
+    const refresh = () => {
+      void api
+        .messageCounters()
+        .then((c) => {
+          if (stopped || !("setAppBadge" in navigator)) return;
+          const unread = c.inbox?.unread ?? 0;
+          if (unread > 0) void navigator.setAppBadge(unread);
+          else void navigator.clearAppBadge();
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener(NEW_MAIL_EVENT, refresh);
+    return () => {
+      stopped = true;
+      window.removeEventListener(NEW_MAIL_EVENT, refresh);
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

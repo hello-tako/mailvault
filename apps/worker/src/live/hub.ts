@@ -41,8 +41,17 @@ export class MailboxHub implements DurableObject {
 
   /** The client pings to keep proxies from idling the socket out; reply so it can tell a
    *  dead connection from a quiet one. */
-  async websocketMessage(_connection: WebSocket, _message: string | ArrayBuffer): Promise<void> {
-    // Nothing to act on: a browser that stops responding is dropped by the close handler.
+  async websocketMessage(connection: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // The client pings to keep proxies from idling the socket out; answering lets it tell
+    // a quiet connection from a dead one. Anything else needs no action: a browser that
+    // stops responding is dropped by the close handler.
+    if (typeof message === "string" && message.trim() === "ping") {
+      try {
+        connection.send("pong");
+      } catch {
+        // A socket that cannot be written to is on its way out anyway.
+      }
+    }
   }
 
   websocketClose(_connection: WebSocket): void {

@@ -261,20 +261,41 @@ describe("owner-confirmed MX takeover", () => {
     expect(deletes(mutations)).toEqual(["deleteDnsRecord:mx-google"]);
   });
 
-  it("removes the foreign MX and nothing else, then enables routing", async () => {
-    const { client, mutations } = stubClient({ listDnsRecords: zoneDns });
+  it("enables routing first, then removes only the foreign MX — never a TXT record", async () => {
+    // Stateful zone: enable publishes Cloudflare's routing MX, a delete really removes the
+    // record, and every read sees the current truth — the order under test is that the
+    // provider's MX is never the only one left standing.
+    const removed = new Set<string>();
+    let routingPublished = false;
+    const live = async () =>
+      (await zoneDns()).filter((r: { id: string }) => !removed.has(r.id)).concat(
+        routingPublished
+          ? [{ id: "mx-cf", type: "MX", name: "example.com", content: "route1.mx.cloudflare.net", priority: 36 }]
+          : [],
+      );
+    const { client, mutations } = stubClient({
+      listDnsRecords: async () => live(),
+      enableEmailRouting: async () => {
+        mutations.push("enableEmailRouting");
+        routingPublished = true;
+      },
+    });
     const { db, writes } = stubDb();
 
     const out = await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true, authorizeTakeover: async () => {} });
+    const dels = deletes(mutations);
 
-    expect(deletes(mutations)).toEqual(["deleteDnsRecord:mx-google"]);
-    expect(mutations).toContain("enableEmailRouting");
+    expect(dels[0]).toBe("deleteDnsRecord:mx-google");
+    expect(mutations.indexOf("enableEmailRouting")).toBeLessThan(
+      mutations.findIndex((m) => m.startsWith("deleteDnsRecord")),
+    );
     // Measured on a real takeover: enabling routing does not add a second SPF, so deleting
     // the provider's SPF would break the owner's outbound mail for no gain. DKIM/DMARC too.
     expect(mutations).not.toContain("deleteDnsRecord:txt-old-spf");
     expect(mutations).not.toContain("deleteDnsRecord:txt-cf-spf");
     expect(mutations).not.toContain("deleteDnsRecord:txt-dmarc");
     expect(mutations).not.toContain("deleteDnsRecord:txt-key");
+    expect(mutations).not.toContain("deleteDnsRecord:mx-cf");
 
     const audit = writes.filter((w) => /INSERT INTO provisioning_events/.test(w.sql)).map((w) => JSON.stringify(w.binds));
     expect(audit.some((a) => a.includes("mx_takeover") && a.includes("aspmx.l.google.com"))).toBe(true);
@@ -359,5 +380,103 @@ describe("live takeover checks", () => {
     expect(result.ok).toBe(false);
     expect(mutations).toContain("setCatchAllWorker");
     expect(authorized).toBe(0);
+  });
+});
+
+describe("provisionDomain MX take-over order (enable before delete)", () => {
+  // A stateful zone: `enable` publishes Cloudflare's routing MX, deletes remove records,
+  // and every read sees the current truth — the shape the 2026-09-20 outage taught us to
+  // test: the provider's MX must never be the only one left standing.
+  function takeableZone() {
+    const records: Array<{ id: string; type: string; name: string; content: string; priority: number }> = [
+      { id: "mx-google", type: "MX", name: "example.com", content: "aspmx.l.google.com", priority: 1 },
+    ];
+    const mutations: string[] = [];
+    const client = {
+      hasToken: true,
+      listAllZones: async () => [],
+      listDnsRecords: async () => records.filter((r) => r.type === "MX"),
+      deleteDnsRecord: async (_z: string, id: string) => {
+        mutations.push(`deleteDnsRecord:${id}`);
+        const i = records.findIndex((r) => r.id === id);
+        if (i >= 0) records.splice(i, 1);
+      },
+      enableEmailRouting: async () => {
+        mutations.push("enableEmailRouting");
+        records.push({ id: "mx-cf", type: "MX", name: "example.com", content: "route1.mx.cloudflare.net", priority: 36 });
+      },
+      getEmailRoutingStatus: async () => ({ enabled: true }),
+      getEmailRoutingDns: async () => [],
+      getCatchAll: async () => ({ enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }] }),
+      setCatchAllWorker: async () => {
+        mutations.push("setCatchAllWorker");
+      },
+    } as unknown as CloudflareClient;
+    return { client, mutations, records };
+  }
+
+  it("enables routing before removing the provider's MX, and reaches READY", async () => {
+    const { client, mutations, records } = takeableZone();
+    const { db } = stubDb();
+    const out = await provisionDomain(db, client, "z1", "mail-vault", {
+      allowMxTakeover: true,
+      authorizeTakeover: async () => {},
+    });
+    const enable = mutations.indexOf("enableEmailRouting");
+    const del = mutations.findIndex((m) => m.startsWith("deleteDnsRecord:"));
+    expect(enable).toBeGreaterThanOrEqual(0);
+    expect(del).toBeGreaterThan(enable);
+    expect(out.ok).toBe(true);
+    expect(out.status).toBe(MailStatus.Ready);
+    // Only the routing MX remains; the provider's is gone but never was the last one.
+    expect(records.map((r) => r.content)).toEqual(["route1.mx.cloudflare.net"]);
+  });
+
+  it("aborts the take-over with every MX intact when enable is refused", async () => {
+    const { client, mutations } = takeableZone();
+    (client as unknown as { enableEmailRouting: () => Promise<void> }).enableEmailRouting = async () => {
+      mutations.push("enableEmailRouting");
+      throw new CloudflareApiError(
+        "permission",
+        "Cloudflare API error: Authentication error",
+        403,
+        [10000],
+        "/zones/z1/email/routing/enable",
+      );
+    };
+    const { db, writes } = stubDb();
+    const out = await provisionDomain(db, client, "z1", "mail-vault", {
+      allowMxTakeover: true,
+      authorizeTakeover: async () => {},
+    });
+    expect(mutations.filter((m) => m.startsWith("deleteDnsRecord"))).toEqual([]);
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("No MX record was touched");
+    expect(
+      writes.some(
+        (w) => /INSERT INTO provisioning_events/.test(w.sql) && w.binds.join(" ").includes("provision:enable_refused"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the provider's MX when enable succeeds but the routing MX never appears", async () => {
+    const { client, mutations } = takeableZone();
+    // enable "succeeds" without publishing anything — the API accepted the call, DNS says no.
+    (client as unknown as { enableEmailRouting: () => Promise<void> }).enableEmailRouting = async () => {
+      mutations.push("enableEmailRouting");
+    };
+    const { db, writes } = stubDb();
+    const out = await provisionDomain(db, client, "z1", "mail-vault", {
+      allowMxTakeover: true,
+      authorizeTakeover: async () => {},
+    });
+    expect(mutations.filter((m) => m.startsWith("deleteDnsRecord"))).toEqual([]);
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("left in place");
+    expect(
+      writes.some(
+        (w) => /INSERT INTO provisioning_events/.test(w.sql) && w.binds.join(" ").includes("provision:enable_refused"),
+      ),
+    ).toBe(true);
   });
 });

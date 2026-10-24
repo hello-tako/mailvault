@@ -5,7 +5,11 @@ import { z } from "zod";
  * rejected compose can say which one was hit instead of passing an upstream error
  * through untranslated. The ones that are ours say so.
  */
-const MAX_TOTAL_BYTES = 5 * 1024 * 1024;
+// Ours, not Cloudflare's: Email Sending carries up to 25 MiB and inbound accepts 20 MiB, but
+// a compose body is JSON with base64 inside, and 15 MiB of assembled message is already ~3x
+// the practical single-file size the old 5 MiB ceiling allowed. Room to grow, still far from
+// the wire cap.
+const MAX_TOTAL_BYTES = 15 * 1024 * 1024;
 
 export const SEND_LIMITS = {
   /** Combined to + cc + bcc, as one message. */
@@ -75,7 +79,15 @@ export const ComposeInputSchema = z.object({
   html: z.string().max(400_000).optional(),
   fromName: z.string().max(120).optional(),
   /** Reply-To, when the owner wants answers somewhere other than the sending alias. */
-  replyTo: z.string().trim().min(3).max(254).optional(),
+  // One clean address, and nothing that could fold into another header line in the stored
+  // .eml — CRLF in a header value is how stored records get smuggled extra headers.
+  replyTo: z
+    .string()
+    .trim()
+    .min(3)
+    .max(254)
+    .regex(/^[^@\r\n ]{1,64}@[^@\r\n ]{1,190}$/, "replyTo must be one email address")
+    .optional(),
   /** Mail id this compose answers. Sets In-Reply-To/References and joins its thread. */
   replyToMessageId: z.string().min(1).optional(),
   attachments: AttachmentList,

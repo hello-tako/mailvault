@@ -676,7 +676,9 @@ describe("sending files along with a message", () => {
     // The request may carry a file of up to a whole message's size — the shape cannot tell that
     // one file and three small ones apart — so this is the assembled message saying no.
     const { res, body } = await composeWith({
-      attachments: [file("big.bin", new Uint8Array(SEND_LIMITS.maxTotalBytes + 1))],
+      // Exactly a whole message's worth of bytes: inside every request-level ceiling
+      // (base64 of maxTotalBytes is exactly maxTotalBase64Chars), over the assembled one.
+      attachments: [file("big.bin", new Uint8Array(SEND_LIMITS.maxTotalBytes))],
     });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("TOO_LARGE");
@@ -688,7 +690,7 @@ describe("sending files along with a message", () => {
     // Each of these is individually within the request's own ceiling, and each is a base64
     // string that cannot be decoded (its length is 1 mod 4). The code says which guard ran: the
     // size one, so nothing was ever turned into bytes.
-    const unusable = "A".repeat(4_000_001);
+    const unusable = "A".repeat(Math.floor(SEND_LIMITS.maxTotalBase64Chars / 2) + 1);
     const { res, body } = await composeWith({
       attachments: [
         { filename: "a.bin", type: "application/octet-stream", content: unusable },
@@ -701,10 +703,11 @@ describe("sending files along with a message", () => {
   });
 
   it("measures the whole message, not each part, against the ceiling", async () => {
-    // Three files of 1.5 MB each: individually fine, together under the guard that reads the
-    // request's own numbers, and over the ceiling once they are a message. The refusal has to
-    // come before anything is written down.
-    const big = new Uint8Array(1_500_000).fill(7);
+    // Three files of a third of the ceiling minus a little: together their base64 stays
+    // under the request-level guard (which counts only the encoded files), while the
+    // assembled message — base64 plus bodies plus headers — crosses the ceiling. The
+    // refusal has to come from the assembled measurement, before anything is written down.
+    const big = new Uint8Array(Math.floor(SEND_LIMITS.maxTotalBytes / 3) - 65_536).fill(7);
     const { res, body } = await composeWith({
       attachments: [
         file("a.bin", big, "application/octet-stream"),
@@ -714,7 +717,7 @@ describe("sending files along with a message", () => {
     });
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("TOO_LARGE");
-    expect(body.error.message).toMatch(/5\.0 MB/);
+    expect(body.error.message).toMatch(/15\.0 MB/);
     expect(sent).toHaveLength(0);
     expect(
       (await DB.prepare(`SELECT count(*) AS n FROM messages WHERE direction = 'OUT'`).first<any>())

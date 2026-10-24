@@ -310,7 +310,61 @@ function SemanticCard() {
   );
 }
 
+/** R1-A3: Sync may itself enable mail on newly discovered zones preflight clears. The
+ * guardrail is structural, not a promise in prose: provisionDomain refuses anything short
+ * of a clean zone without the owner's takeover confirmations, so auto mode can never
+ * take over an MX or a catch-all. */
+function AutoProvisionCard() {
+  const { data, error, loading, reload } = useAsync(() => api.getAutoProvision(), []);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+
+  async function set(enabled: boolean) {
+    setBusy(true);
+    setStatus(null);
+    try {
+      await api.setAutoProvision(enabled);
+      setStatus({ tone: "ok", text: t(enabled ? "set.apOn" : "set.apOff") });
+      reload();
+    } catch (e) {
+      setStatus({ tone: "error", text: e instanceof Error ? e.message : "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card mt">
+      <h2 style={{ marginTop: 0 }}>{t("set.apTitle")}</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        {t("set.apIntro")}
+      </p>
+      {error && <div className="banner error">{error}</div>}
+      {loading && <div className="banner">{t("common.loading")}</div>}
+      {data && (
+        <div className="row wrap" style={{ marginTop: 12 }}>
+          {data.enabled ? (
+            <button disabled={busy} onClick={() => set(false)}>
+              {t("set.apTurnOff")}
+            </button>
+          ) : (
+            <button className="primary" disabled={busy} onClick={() => set(true)}>
+              {t("set.apTurnOn")}
+            </button>
+          )}
+        </div>
+      )}
+      {status && (
+        <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`} style={{ marginTop: 12 }}>
+          {status.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Settings() {
+
   const [state, setState] = useState<PushState | null>(null);
   const [server, setServer] = useState<{ enabled: boolean; subscriptions: number } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -438,6 +492,7 @@ export function Settings() {
       </div>
 
       <PasskeysCard />
+      <AutoProvisionCard />
       <SemanticCard />
 
       <div className="card mt">
