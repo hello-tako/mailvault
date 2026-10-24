@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@mailvault/shared": "workspace:*",
-    "@simplewebauthn/server": "^14.0.2",
+    "@simplewebauthn/server": "^14.0.3",
     "hono": "^4.13.13",
     "jose": "^5.9.6",
     "mailauth": "7.1.1",
@@ -29,11 +29,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260921.1",
+    "@cloudflare/workers-types": "^5.20261021.1",
     "@types/node": "^22.10.2",
     "miniflare": "3.20241230.0",
     "typescript": "^5.7.2",
     "vitest": "~2.1.8",
-    "wrangler": "^4.136.0"
+    "wrangler": "^4.151.3"
   }
 }
