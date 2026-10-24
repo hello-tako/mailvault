@@ -149,7 +149,9 @@ Thứ tự trong release: **A2 (đảo thứ tự an toàn — fix rủi ro trư
 
 ### R2 — "Gửi mail hoàn thiện" (tuần 3–4)
 
-> **Trạng thái 2026-10-25 — lát đầu ĐÃ SHIP (PR #24).** B1 (BCC trong compose; reply thêm CC + sửa subject prefilled + fromName cả hai chế độ — API đã hỗ trợ từ trước, chỉ UI chưa lộ), B5 (nút "Send it again" cho send terminal-fail: `POST /api/messages/:id/resend`, worker đọc lại body/file từ R2, row mới cùng thread, lần hỏng giữ làm lịch sử), B9-lite (delivery event khiến send fail terminal → nudge `{type:"send-failed"}` qua hub → toast "không gửi được" + lối tắt Sent; push cho bounce để ở R4 theo nguyên tắc payload-free). Test: worker 480 (+6), web 116, E2E 65. Còn của R2: B2 markdown→HTML, B3 ảnh inline, B4 forward + attach-from-mail, B4 server drafts, B6 scheduled/undo, B10 contacts.
+> **Lát 2 ĐÃ SHIP (PR #25, 2026-10-25).** Forward (More menu + phím `f`, `POST /api/messages/:id/forward`: intro của owner + bản gốc đính `message/rfc822` hoặc trích text server-side; checkbox "Attach the original (.eml)") và markdown→HTML server-side (`src/mail/markdown.ts` — bold/em/code/list/quote→blockquote/link https; HTML alternative qua sanitizer chung, plain text nguyên văn). Test: worker 491 (+11), web 116, E2E 66 (+1 forward tự dọn dữ liệu).
+
+> **Trạng thái 2026-10-25 — lát đầu ĐÃ SHIP (PR #24).** B1 (BCC trong compose; reply thêm CC + sửa subject prefilled + fromName cả hai chế độ — API đã hỗ trợ từ trước, chỉ UI chưa lộ), B5 (nút "Send it again" cho send terminal-fail: `POST /api/messages/:id/resend`, worker đọc lại body/file từ R2, row mới cùng thread, lần hỏng giữ làm lịch sử), B9-lite (delivery event khiến send fail terminal → nudge `{type:"send-failed"}` qua hub → toast "không gửi được" + lối tắt Sent; push cho bounce để ở R4 theo nguyên tắc payload-free). Test: worker 480 (+6), web 116, E2E 65. Còn của R2: B3 ảnh inline, attach-from-mail trong reply, server drafts, B6 scheduled/undo, B10 contacts.
 
 B1 → B5 (resend) → B4 (forward + attach-from-mail) → B9 (bounce notify) → B2 (markdown→HTML) → B3 (inline images — sau khi C2 xong hoặc tạm chỉ gửi) → B6 (scheduled + undo).
 
