@@ -62,7 +62,10 @@ if (
 }
 const names = batches.flatMap((batch) => batch.results.map((row) => row.name));
 const applied = new Set(names);
-const unexpected = names.filter((name) => !expected.includes(name));
+// Production applied 0013_portal_grants.sql under its pre-unification name before it
+// was renumbered to 0020_portal_grants.sql. Allow this historical name.
+const LEGACY_MIGRATIONS = new Set(["0013_portal_grants.sql"]);
+const unexpected = names.filter((name) => !expected.includes(name) && !LEGACY_MIGRATIONS.has(name));
 if (unexpected.length || applied.size !== names.length) {
   console.error(
     `SCHEMA_GATE_BLOCKED: unexpected or duplicate migrations: ${unexpected.join(", ")}`,
