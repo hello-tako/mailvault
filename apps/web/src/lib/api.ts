@@ -97,6 +97,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // The Worker requires this custom header on state-changing calls as a CSRF signal, and
 // looks for the step-up grant on the ones that cannot be undone.
+/** Which mail may interrupt (D1). Mirrors the worker's notification_prefs row. */
+export interface NotificationPref {
+  id: string;
+  scopeType: "alias" | "sender_domain";
+  scopeValue: string;
+  action: "all" | "mute";
+}
+
 function mutation(body?: unknown, method = "POST"): RequestInit {
   return {
     method,
@@ -235,6 +243,17 @@ export const api = {
   recipients: (q: string) => request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
   compose: (input: ComposeInput, key: string) =>
     request<SendOutcome>("/outbox", sendingMutation(input, key)),
+  /** Which mail may interrupt (D1). Muting never touches storage or search. */
+  listNotificationPrefs: () =>
+    request<{ items: NotificationPref[] }>("/notifications/prefs"),
+  setNotificationPref: (input: {
+    scopeType: "alias" | "sender_domain";
+    scopeValue: string;
+    action: "all" | "mute";
+  }) => request<NotificationPref>("/notifications/prefs", mutation(input)),
+  deleteNotificationPref: (id: string) =>
+    request<{ id: string }>(`/notifications/prefs/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
+
   /** Hand one stored message to somebody new: an intro plus the original (B2). */
   forwardMessage: (id: string, input: ForwardInput, key: string) =>
     request<SendOutcome>(`/messages/${encodeURIComponent(id)}/forward`, sendingMutation(input, key)),

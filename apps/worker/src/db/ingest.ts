@@ -407,7 +407,7 @@ export async function reconcileIngestCore(
   db: D1Database,
   messageId: string,
   attachments: InsertAttachmentInput[],
-  text: { subject: string | null; preview: string | null; sender: string | null },
+  text: { subject: string | null; preview: string | null; sender: string | null; body?: string | null },
 ): Promise<void> {
   const statements = attachments.map((attachment) =>
     db
@@ -441,12 +441,12 @@ export async function reconcileIngestCore(
       .bind(messageId),
     db
       .prepare(
-        `INSERT INTO messages_fts (message_id, subject, preview, sender)
-         SELECT ?1,?2,?3,?4
+        `INSERT INTO messages_fts (message_id, subject, preview, sender, body)
+         SELECT ?1,?2,?3,?4,?5
          WHERE EXISTS (SELECT 1 FROM messages WHERE id = ?1 AND deletion_pending = 0)
            AND NOT EXISTS (SELECT 1 FROM deletion_jobs WHERE job_type = 'MESSAGE' AND message_id = ?1)`,
       )
-      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
+      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? "", text.body ?? ""),
     db
       .prepare(
         `UPDATE messages SET ingest_status = CASE

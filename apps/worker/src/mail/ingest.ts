@@ -590,6 +590,7 @@ export async function commitIngest(
       subject: staged.subject,
       preview,
       sender: staged.from,
+      body: (staged.text ?? "").slice(0, 20_000),
     });
     if (!(await ingestCoreComplete(db, record, staged.attachments))) {
       throw new Error("ingest_core_reconciliation_failed");
@@ -604,6 +605,7 @@ export async function commitIngest(
       subject: staged.subject,
       preview,
       sender: staged.from,
+      body: (staged.text ?? "").slice(0, 20_000),
     });
     record = await findIngestById(db, job.messageId);
     if (!record) throw new Error("ingest_message_missing_after_core");

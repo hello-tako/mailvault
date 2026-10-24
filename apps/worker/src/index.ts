@@ -19,6 +19,9 @@ import { recordOpsFailure } from "./lib/ops-alert";
 import { MailboxHub, notifyNewMail, notifySendFailed } from "./live/hub";
 import { log } from "./lib/logging";
 import { runWatchdog } from "./provisioning/watchdog";
+import { getSetting, setSetting } from "./db/settings";
+import { backfillFtsBodies } from "./mail/fts-backfill";
+import { isNotificationMuted } from "./db/notifications";
 import { drainDeletionJobs } from "./db/deletions";
 
 // Durable Object classes must be exported from the entry module.
@@ -132,6 +135,25 @@ export default {
       log.error("deletion_drain_failed", { error: err instanceof Error ? err.message : "error" });
     }
 
+    // Plan C1: until the whole archive carries a searchable body, spend a slice of each
+    // hourly run backfilling from R2. Self-terminating: once nothing is left, the switch
+    // in app_settings turns it off for good.
+    try {
+      if ((await getSetting(env.DB, "ftsBodyBackfill")) !== "done") {
+        const fts = await backfillFtsBodies(env.DB, env.MAIL_BUCKET, 800);
+        if (fts.remaining === 0) {
+          await setSetting(env.DB, "ftsBodyBackfill", "done");
+          log.info("fts_body_backfill_done", { processed: fts.processed });
+        } else if (fts.processed > 0) {
+          log.info("fts_body_backfill", { processed: fts.processed, remaining: fts.remaining });
+        }
+      }
+    } catch (err) {
+      log.warn("fts_body_backfill_failed", {
+        error: err instanceof Error ? err.message : "error",
+      });
+    }
+
     const token = env.CLOUDFLARE_API_TOKEN;
     if (!token || !env.MAIL_WORKER_NAME) {
       log.warn("watchdog_skipped", {
@@ -186,11 +208,21 @@ async function consumeIngestBatch(
         commitMs: timer.stop(),
       });
       if (result.status === "stored") {
-        // Notify only after the mail is durable, and detached: a slow or dead push
-        // endpoint must never affect delivery or make the message retry.
-        ctx.waitUntil(
-          Promise.allSettled([pushToAll(env, env.DB), notifyNewMail(env)]).then(() => undefined),
-        );
+        // A muted alias or sender keeps its mail — only the interruption is withheld, and
+        // the choice is read after the commit so it can never affect delivery either.
+        const muted = await isNotificationMuted(env.DB, {
+          aliasId: message.body.aliasId,
+          envelopeFrom: message.body.envelopeFrom,
+        });
+        if (muted) {
+          writeMetric(env, "notify", { outcome: "skipped", reason: "muted" });
+        } else {
+          // Notify only after the mail is durable, and detached: a slow or dead push
+          // endpoint must never affect delivery or make the message retry.
+          ctx.waitUntil(
+            Promise.allSettled([pushToAll(env, env.DB), notifyNewMail(env)]).then(() => undefined),
+          );
+        }
       }
       message.ack();
     } catch (err) {

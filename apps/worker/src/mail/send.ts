@@ -453,6 +453,7 @@ export async function sendOutbound(
       preview,
       // Sent mail is found by who it went to, since there is no external sender to match.
       sender: [...lists.to, ...lists.cc].join(", "),
+      body: req.text.slice(0, 20_000),
     });
     // Every destination starts as `queued` here rather than appearing only when it reports
     // back, so a message whose recipients never answer still shows who it was addressed to.

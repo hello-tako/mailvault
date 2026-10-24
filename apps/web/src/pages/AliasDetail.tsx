@@ -20,6 +20,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 export function AliasDetail({ id }: { id: string }) {
   const { data, error, loading, reload } = useAsync(() => api.getAlias(id), [id]);
+  const { data: prefs, reload: reloadPrefs } = useAsync(() => api.listNotificationPrefs(), []);
   const [label, setLabel] = useState("");
   const [notes, setNotes] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -55,6 +56,9 @@ export function AliasDetail({ id }: { id: string }) {
   if (loading && !data) return <Loading />;
 
   const a = data?.alias;
+  const notificationsMuted = !!a && !!prefs?.items.some(
+    (p) => p.scopeType === "alias" && p.scopeValue === a.id && p.action === "mute",
+  );
   const stats = data?.stats;
 
   return (
@@ -91,6 +95,22 @@ export function AliasDetail({ id }: { id: string }) {
                 </button>
                 <button className="small" onClick={() => navigate(`/inbox?alias=${a.id}`)}>
                   {t("alias.openInbox")}
+                </button>
+                <button
+                  className="small"
+                  title={t("alias.muteHint")}
+                  onClick={() => {
+                    if (!a) return;
+                    void api
+                      .setNotificationPref({
+                        scopeType: "alias",
+                        scopeValue: a.id,
+                        action: notificationsMuted ? "all" : "mute",
+                      })
+                      .then(reloadPrefs);
+                  }}
+                >
+                  {t(notificationsMuted ? "alias.unmute" : "alias.mute")}
                 </button>
               </div>
             </div>
