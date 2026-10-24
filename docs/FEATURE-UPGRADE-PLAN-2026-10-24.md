@@ -141,6 +141,8 @@ Nguyên tắc: **safety trước — pain của owner trước — nền có tes
 
 ### R1 — "Nhận mail trọn vẹn" (tuần 1–2) — giải quyết pain #1
 
+> **Trạng thái 2026-10-25 — ĐÃ SHIP (PR #23, production e68ee87b).** Đủ: A2 (enable-before-delete + event `provision:enable_refused` + 3 test), A6 (probe DoH + `DNS_UNRESOLVABLE` + 4 test), A3 (setting + API + hook sync + toggle Settings, default OFF), B8 (limit 5→15 MiB, replyTo validate, sanitize HTML lúc write, subject UI 998), D8 (badge App-level, hub ping→pong). A1 không cần làm — UI chọn nhiều zone → Preflight → Enable đã có sẵn. Còn của R1: A8 (probe e2e sau provision) và A9 (gợi ý alias trong wizard) — chuyển sang làm đầu R2.
+
 Thứ tự trong release: **A2 (đảo thứ tự an toàn — fix rủi ro trước)** → A1 (wizard + bulk enable) → A6 (DoH probe) → A3 (auto-provision opt-in) → A9 → B8 (các fix nhỏ replyTo/subject/limit/sanitize/ops-alert pipeline) → D8 (badge hygiene) → A8 (probe e2e — cần domain sending đã onboard).
 
 **Definition of done**: thêm domain mới (zone sạch) từ lúc bấm sync tới thư test đầu tiên tới inbox **≤ 2 phút, 0 thao tác dashboard**; enable fail không bao giờ để domain mất MX (test dựng lại kịch bản 2026-09-20); domain expired registrar bị watchdog đỏ trong ≤ 1 giờ; E2E wizard xanh.
