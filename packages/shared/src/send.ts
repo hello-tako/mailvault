@@ -110,6 +110,20 @@ export const ReplyInputSchema = z.object({
 });
 export type ReplyInput = z.infer<typeof ReplyInputSchema>;
 
+/** Forwarding one stored message (B2): an intro in the owner's words, plus the original
+ * either inlined as quoted text or riding along as the untouched .eml. */
+export const ForwardInputSchema = z.object({
+  fromAddress: z.string().trim().min(3).max(254),
+  to: AddressList.min(1),
+  cc: AddressList.optional(),
+  bcc: AddressList.optional(),
+  subject: z.string().max(SEND_LIMITS.maxSubjectChars).optional(),
+  intro: z.string().max(200_000).default(""),
+  /** Attach the untouched original as message/rfc822 rather than quoting it inline. */
+  attachOriginal: z.boolean().default(true),
+});
+export type ForwardInput = z.infer<typeof ForwardInputSchema>;
+
 /** Autocomplete input: a fragment of an address or a display name, nothing more. */
 export const RecipientQuerySchema = z.object({ q: z.string().trim().max(80).optional() });
 

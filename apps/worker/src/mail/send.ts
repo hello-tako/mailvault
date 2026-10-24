@@ -12,6 +12,7 @@ import { maxSendsPerDay } from "../env";
 import { badRequest } from "../lib/errors";
 import { sanitizeFilename } from "../lib/filename";
 import { sanitizeEmailHtml } from "../security/sanitize-html";
+import { markdownToHtml } from "./markdown";
 import { log } from "../lib/logging";
 import { newId, sha256Hex } from "../lib/util";
 import { writeMetric } from "../lib/metrics";
@@ -278,6 +279,13 @@ export async function sendOutbound(
     // later download hands out. https images survive: they are the owner's own choice in a
     // message being sent, unlike a stranger's tracking pixels in one being read.
     req.html = sanitizeEmailHtml(req.html, { allowRemoteImages: true });
+  }
+  // Markdown writes itself into the alternative part (B2): the plain text stays exactly
+  // what the owner typed, and the HTML those same keystrokes become is generated here and
+  // passes the sanitizer below like any other body. Explicit HTML, when a client sends it,
+  // always wins.
+  if (!req.html && req.text.trim()) {
+    req.html = sanitizeEmailHtml(markdownToHtml(req.text), { allowRemoteImages: true });
   }
   if (!req.text.trim() && !req.html?.trim()) return fail("EMPTY_BODY", "Write something first.");
 
@@ -714,6 +722,78 @@ export async function resendMessage(
       subject: row.subject ?? "",
       text: parsed?.text ?? "",
       html: parsed?.html,
+      attachments,
+    },
+    env,
+    db,
+    bucket,
+  );
+}
+
+/**
+ * Hand one stored message to somebody new (B2). The intro is the owner's own words; the
+ * original rides along either quoted as text — through the same markdown the composer uses,
+ * so its quote lines fold into a real blockquote — or as the untouched .eml, which is the
+ * honest way to hand over a message without re-speaking for it.
+ */
+export async function forwardMessage(
+  messageId: string,
+  req: {
+    idempotencyKey?: string;
+    fromAddress: string;
+    to: string[];
+    cc?: string[];
+    bcc?: string[];
+    subject?: string;
+    intro?: string;
+    attachOriginal?: boolean;
+  },
+  env: Env,
+  db: D1Database,
+  bucket: R2Bucket,
+): Promise<SendResult> {
+  const row = await getMessageRow(db, messageId);
+  if (!row) return fail("NOT_FOUND", "That message is gone.");
+
+  const parsed = row.parsed_r2_key
+    ? await getObject(bucket, row.parsed_r2_key)
+        .then((obj) => (obj ? (obj.json() as Promise<{ text?: string }>) : null))
+        .catch(() => null)
+    : null;
+  const forwarded = [
+    `── Forwarded ──`,
+    `From: ${row.header_from ?? row.envelope_from ?? ""}`,
+    `Subject: ${row.subject ?? ""}`,
+    `Date: ${row.received_at}`,
+    "",
+    (parsed?.text ?? "").slice(0, 60_000),
+  ].join("\n");
+  const text = req.intro?.trim() ? `${req.intro.trim()}\n\n${forwarded}` : forwarded;
+
+  const attachments: ComposeAttachment[] = [];
+  if (req.attachOriginal !== false) {
+    const raw = await getObject(bucket, row.raw_r2_key);
+    if (raw) {
+      attachments.push({
+        filename: `${sanitizeFilename(row.subject || "message")}.eml`,
+        type: "message/rfc822",
+        content: encodeBase64(new Uint8Array(await raw.arrayBuffer())),
+      });
+    }
+  }
+
+  const base = req.subject?.trim() || row.subject || "";
+  const subject = (/^fwd:/i.test(base) ? base : `Fwd: ${base}`).slice(0, SEND_LIMITS.maxSubjectChars);
+
+  return sendOutbound(
+    {
+      idempotencyKey: req.idempotencyKey,
+      fromAddress: req.fromAddress,
+      to: req.to,
+      cc: req.cc,
+      bcc: req.bcc,
+      subject,
+      text,
       attachments,
     },
     env,

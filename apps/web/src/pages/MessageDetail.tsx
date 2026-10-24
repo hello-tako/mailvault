@@ -57,6 +57,7 @@ export function MessageDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmResend, setConfirmResend] = useState(false);
   const [replying, setReplying] = useState(false);
+  const [forwarding, setForwarding] = useState(false);
   const markedRef = useRef<string | null>(null);
 
   const { data, error, loading, reload } = useAsync(() => api.getMessage(id, remoteImages), [id, remoteImages]);
@@ -78,12 +79,15 @@ export function MessageDetail({
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.key.toLowerCase() !== "r") return;
+      const key = e.key.toLowerCase();
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (key !== "r" && key !== "f") return;
       const el = document.activeElement;
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
       if (document.querySelector(".palette, .modal")) return;
       e.preventDefault();
-      setReplying(true);
+      if (key === "f") setForwarding(true);
+      else setReplying(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -235,6 +239,7 @@ export function MessageDetail({
                 small
                 label={t("common.more")}
                 items={[
+                  { label: t("msg.forward"), onSelect: () => setForwarding(true) },
                   { label: t(data.starred ? "msg.unstar" : "msg.star"), onSelect: () => void toggleStar() },
                   {
                     label: t("msg.downloadEml"),
@@ -466,6 +471,24 @@ export function MessageDetail({
             })}
           </ol>
         </section>
+      ) : null}
+
+      {forwarding ? (
+        <Suspense fallback={null}>
+          <Composer
+            forwardOf={data}
+            sendableAliases={outbox.aliases}
+            remaining={outbox.capabilities?.remaining ?? 0}
+            bindingMissing={outbox.capabilities?.bindingMissing}
+            onClose={() => setForwarding(false)}
+            onSent={() => {
+              setForwarding(false);
+              reload();
+              outbox.reload();
+              setNotice(t("msg.forwardSent"));
+            }}
+          />
+        </Suspense>
       ) : null}
 
       {replying ? (

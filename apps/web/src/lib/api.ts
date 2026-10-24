@@ -30,6 +30,7 @@ import type {
   ReplyInput,
   ImportAliasesInput,
   ImportAliasesResult,
+  ForwardInput,
   SendOutcome,
   SendingPreview,
   UpdateAliasInput,
@@ -234,6 +235,10 @@ export const api = {
   recipients: (q: string) => request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
   compose: (input: ComposeInput, key: string) =>
     request<SendOutcome>("/outbox", sendingMutation(input, key)),
+  /** Hand one stored message to somebody new: an intro plus the original (B2). */
+  forwardMessage: (id: string, input: ForwardInput, key: string) =>
+    request<SendOutcome>(`/messages/${encodeURIComponent(id)}/forward`, sendingMutation(input, key)),
+
   /** A failed send, tried again as a new message in the same thread (B5). */
   resendMessage: (id: string) =>
     request<SendOutcome>(`/messages/${encodeURIComponent(id)}/resend`, mutation()),

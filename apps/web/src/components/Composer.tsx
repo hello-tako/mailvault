@@ -245,6 +245,7 @@ function RecipientField({
  */
 export function Composer({
   replyTo,
+  forwardOf,
   sendableAliases,
   remaining,
   bindingMissing = false,
@@ -252,6 +253,8 @@ export function Composer({
   onSent,
 }: {
   replyTo?: MessageDetail | null;
+  /** Forwarding one stored message: compose fields plus the original, quoted or attached. */
+  forwardOf?: MessageDetail | null;
   sendableAliases: SendableAlias[];
   remaining: number;
   /** The server has no way to send at all — said once, up front, instead of on Submit. */
@@ -260,6 +263,7 @@ export function Composer({
   onSent: (outcome: SendOutcome) => void;
 }) {
   const isReply = !!replyTo;
+  const isForward = !!forwardOf;
   // A new compose picks up where the last one left off, on this device only. A reply has
   // its context in the message it answers, so it never touches the draft slot.
   const [restoredDraft] = useState(() => (replyTo ? null : readDraft()));
@@ -269,8 +273,15 @@ export function Composer({
   const [bcc, setBcc] = useState("");
   // A reply starts from the subject it answers (the Worker adds "Re:" if it is missing);
   // the owner can still reword it, and bring more people into the copy line.
-  const [subject, setSubject] = useState(replyTo?.subject ?? restoredDraft?.subject ?? "");
+  const [subject, setSubject] = useState(
+    forwardOf?.subject
+      ? /^fwd:/i.test(forwardOf.subject)
+        ? forwardOf.subject
+        : `Fwd: ${forwardOf.subject}`
+      : (replyTo?.subject ?? restoredDraft?.subject ?? ""),
+  );
   const [fromName, setFromName] = useState("");
+  const [attachOriginal, setAttachOriginal] = useState(true);
   const [text, setText] = useState(() => (replyTo ? quoteOf(replyTo) : restoredDraft?.text ?? ""));
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -311,7 +322,13 @@ export function Composer({
   const canSend =
     !bindingMissing &&
     !overBudget &&
-    (isReply ? text.trim().length > 0 : splitAddresses(to).length > 0 && text.trim().length > 0);
+    // A forward's body is the message it carries; an intro is optional when the original
+    // rides along, required when it does not (the checkbox covers that choice).
+    (isReply
+      ? text.trim().length > 0
+      : isForward
+        ? splitAddresses(to).length > 0 && (attachOriginal || text.trim().length > 0)
+        : splitAddresses(to).length > 0 && text.trim().length > 0);
 
   /**
    * Read what was chosen, and say so when one of them cannot go.
@@ -352,6 +369,24 @@ export function Composer({
     try {
       const ccList = splitAddresses(cc);
       const bccList = splitAddresses(bcc);
+      if (isForward && forwardOf) {
+        const outcome = await api.forwardMessage(
+          forwardOf.id,
+          {
+            fromAddress: from,
+            to: splitAddresses(to),
+            ...(ccList.length > 0 ? { cc: ccList } : {}),
+            ...(bccList.length > 0 ? { bcc: bccList } : {}),
+            ...(subject.trim() ? { subject: subject.trim() } : {}),
+            intro: text,
+            attachOriginal,
+          },
+          sendKey.current,
+        );
+        onSent(outcome);
+        setBusy(false);
+        return;
+      }
       const outcome = isReply
         ? await api.reply(
             replyTo.id,
@@ -388,7 +423,7 @@ export function Composer({
   }
 
   return (
-    <Modal title={t(isReply ? "composer.replyTitle" : "composer.title")} onClose={onClose}>
+    <Modal title={t(isForward ? "composer.forwardTitle" : isReply ? "composer.replyTitle" : "composer.title")} onClose={onClose}>
       <form onSubmit={submit} className="composer">
         {isReply ? (
           <>
@@ -471,6 +506,19 @@ export function Composer({
                 onPick={setBcc}
               />
             </details>
+            {isForward ? (
+              <div className="field">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={attachOriginal}
+                    onChange={(e) => setAttachOriginal(e.target.checked)}
+                  />
+                  {t("composer.attachOriginal")}
+                </label>
+                <div className="field-hint">{t("composer.attachOriginalHint")}</div>
+              </div>
+            ) : null}
             <div className="field">
               <label htmlFor="compose-subject">{t("composer.subject")}</label>
               <input
