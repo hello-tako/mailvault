@@ -200,3 +200,43 @@ test("desktop: a lost accepted response retries with the same send key", async (
   await expect(row).toHaveCount(1);
   await deleteTestMessage(page, await row.getAttribute("data-msg-id"));
 });
+
+test("desktop: forwarding hands a stored message to somebody new, original attached", async ({ page }) => {
+  const recipient = `forward-${Date.now()}@example.com`;
+  // A message to forward: send one, let it land, then hand it over from its own screen.
+  const subject = `Forward me ${Date.now()}`;
+  await page.goto("/#/inbox");
+  await page.getByRole("button", { name: "Compose" }).click();
+  const compose = page.getByRole("dialog", { name: "New message" });
+  await compose.getByLabel("To", { exact: true }).fill("first@example.net");
+  await compose.getByLabel("Subject", { exact: true }).fill(subject);
+  await compose.getByLabel("Message", { exact: true }).fill("the words being handed on");
+  await compose.getByRole("button", { name: "Send" }).click();
+  await expect(compose).toHaveCount(0);
+
+  // The forward's own preview quotes this subject, so the original is the row without "Fwd:".
+  const row = page.locator(".msg").filter({ hasText: subject }).filter({ hasNotText: "Fwd:" });
+  await row.getByRole("link").click();
+  await page.locator(".mail-pane").getByRole("button", { name: "More" }).click();
+  await page.locator(".mail-pane").getByRole("menuitem", { name: "Forward" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Forward a message" });
+  await expect(dialog.getByLabel("Subject", { exact: true })).toHaveValue(`Fwd: ${subject}`);
+  await expect(dialog.getByLabel("Attach the original (.eml)")).toBeChecked();
+  await dialog.getByLabel("To", { exact: true }).fill(recipient);
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // The forward left from the reading pane, so the list has not moved by itself: ask for
+  // Sent the way the owner would, and the forwarded row is the receipt.
+  await page.getByRole("button", { name: /^Sent/ }).click();
+  // The forward committed while the list still showed the previous query's answer; ask
+  // for it plainly rather than trusting the race.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  const forwarded = page.locator(".msg").filter({ hasText: `Fwd: ${subject}` });
+  await expect(forwarded).toBeVisible();
+
+  // Local dev state survives between runs; a suite downstream counts this mailbox's mail.
+  await deleteTestMessage(page, await row.getAttribute("data-msg-id"));
+  await deleteTestMessage(page, await forwarded.getAttribute("data-msg-id"));
+});

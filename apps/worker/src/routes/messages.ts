@@ -7,6 +7,7 @@ import {
   ReadFlagSchema,
   ReplyInputSchema,
   paginated,
+  ForwardInputSchema,
   type BulkMessageResult,
 } from "@mailvault/shared";
 import type { AppEnv } from "../app-env";
@@ -29,8 +30,11 @@ import {
 } from "../db/messages";
 import { AppError, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
-import { sendIdempotencyKey, sendReply,
+import {
+  forwardMessage,
   resendMessage,
+  sendIdempotencyKey,
+  sendReply,
 } from "../mail/send";
 import { sanitizeFilename } from "../lib/filename";
 import { getObject } from "../storage/r2";
@@ -210,6 +214,26 @@ export const messagesRoute = new Hono<AppEnv>()
       throw new AppError(400, result.code, result.message);
     }
     log.info("reply_sent", { messageId: id, replyId: result.outcome.id, actor: actorOf(c).email });
+    return c.json(result.outcome, 201);
+  })
+
+  /** Hand one stored message to somebody new (B2): an intro plus the original, inlined or
+   * attached as the untouched .eml. Recipients are the owner's choice, as in any compose. */
+  .post("/api/messages/:id/forward", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const input = await readJson(c, ForwardInputSchema);
+    const result = await forwardMessage(
+      id,
+      { ...input, idempotencyKey: sendIdempotencyKey(c.req.header("Idempotency-Key")) },
+      c.env,
+      c.env.DB,
+      c.env.MAIL_BUCKET,
+    );
+    if (!result.ok) {
+      log.warn("forward_refused", { messageId: id, code: result.code });
+      throw new AppError(400, result.code, result.message);
+    }
+    log.info("forward_sent", { messageId: id, forwardId: result.outcome.id, actor: actorOf(c).email });
     return c.json(result.outcome, 201);
   })
 

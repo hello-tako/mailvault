@@ -563,6 +563,12 @@ export const en: Dict = {
   "msg.toPrefix": "To",
 
   "composer.title": "New message",
+  "composer.forwardTitle": "Forward a message",
+  "composer.attachOriginal": "Attach the original (.eml)",
+  "composer.attachOriginalHint":
+    "The untouched message rides along as a file; uncheck to quote it as text instead.",
+  "msg.forward": "Forward",
+  "msg.forwardSent": "Forwarded — the new message is in Sent.",
   "composer.replyTitle": "Reply",
   "composer.from": "From",
   "composer.bcc": "Bcc",
@@ -1258,7 +1264,13 @@ export const vi: Dict = {
   "msg.toPrefix": "Tới",
 
   "composer.title": "Thư mới",
-  "composer.replyTitle": "Trả lời",
+"composer.forwardTitle": "Chuyển tiếp thư",
+  "composer.attachOriginal": "Đính kèm bản gốc (.eml)",
+  "composer.attachOriginalHint":
+    "Thư gốc đi nguyên vẹn như một tệp; bỏ chọn để trích thành văn bản thay thế.",
+  "msg.forward": "Chuyển tiếp",
+  "msg.forwardSent": "Đã chuyển tiếp — thư mới nằm trong Đã gửi.",
+    "composer.replyTitle": "Trả lời",
   "composer.from": "Từ",
   "composer.bcc": "Bcc",
   "composer.ccBcc": "Cc / Bcc",

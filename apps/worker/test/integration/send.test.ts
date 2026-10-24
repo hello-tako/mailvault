@@ -871,6 +871,80 @@ describe("sending a failed message again (B5)", () => {
     const after = await DB.prepare(`SELECT send_status FROM messages WHERE id = ?1`).bind(body.id).first<any>();
     expect(after.send_status).toBe("BOUNCED");
   });
+
+  it("markdown in a compose becomes the HTML alternative, sanitized", async () => {
+    const { body } = await composeWith({ subject: "marked up", text: "**bold** and `code`\n\n> quoted" });
+    const parsed = await BUCKET.get(`parsed/${body.id}.json`).then((o: any) => o?.json());
+    expect(parsed.html).toContain("<strong>bold</strong>");
+    expect(parsed.html).toContain("<code>code</code>");
+    expect(parsed.html).toContain("<blockquote>");
+    // The wire copy still carries the plain text the owner actually typed.
+    expect(sent[sent.length - 1].text).toContain("**bold**");
+  });
+
+  it("forwards a stored message with the original attached as .eml (B2)", async () => {
+    // An inbound message to forward: reuse a compose row, flipped to inbound.
+    const { body } = await composeWith({ subject: "inbound to forward", text: "the content" });
+    await DB.prepare(`UPDATE messages SET direction = 'IN' WHERE id = ?1`).bind(body.id).run();
+    const before = sent.length;
+
+    const res = await worker.fetch(
+      req(`/api/messages/${body.id}/forward`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          fromAddress: aliasAddress,
+          to: ["newperson@example.net"],
+          intro: "fyi",
+          attachOriginal: true,
+        }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(201);
+    const out = await j(res);
+    expect(sent.length).toBe(before + 1);
+    expect(sent[sent.length - 1].subject).toBe("Fwd: inbound to forward");
+    expect(sent[sent.length - 1].text).toContain("fyi");
+    expect(sent[sent.length - 1].text).toContain("the content");
+    const wire = sent[sent.length - 1];
+    expect(JSON.stringify(wire.attachments)).toContain(".eml");
+    const rows = await DB.prepare(`SELECT filename, content_type FROM attachments WHERE message_id = ?1`).bind(out.id).all();
+    expect((rows.results ?? []).some((r: any) => r.content_type === "message/rfc822")).toBe(true);
+  });
+
+  it("forwards without the attachment when the owner asked for the quote only", async () => {
+    const { body } = await composeWith({ subject: "quote only please", text: "payload" });
+    await DB.prepare(`UPDATE messages SET direction = 'IN' WHERE id = ?1`).bind(body.id).run();
+    const res = await worker.fetch(
+      req(`/api/messages/${body.id}/forward`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["x@example.net"], attachOriginal: false }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(201);
+    const out = await j(res);
+    const rows = await DB.prepare(`SELECT count(*) AS n FROM attachments WHERE message_id = ?1`).bind(out.id).first<any>();
+    expect(rows.n).toBe(0);
+  });
+
+  it("refuses to forward a message that is not there", async () => {
+    const res = await worker.fetch(
+      req(`/api/messages/does-not-exist/forward`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ fromAddress: aliasAddress, to: ["x@example.net"] }),
+      }),
+      TEST_ENV,
+      CTX,
+    );
+    expect(res.status).toBe(400);
+    expect((await j(res)).error.code).toBe("NOT_FOUND");
+  });
 });
 
 describe("listing received and sent mail", () => {
