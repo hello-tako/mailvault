@@ -255,6 +255,37 @@ export async function provisionDomain(
     }
 
     if (mxTakeover) {
+      // Enable BEFORE deleting (the 2026-09-20 lesson): `enable` adds Cloudflare's routing
+      // MX alongside the provider's, so mail keeps flowing while both exist — and if the
+      // token is refused (the outage's exact shape: it could delete DNS but not enable
+      // routing), the take-over aborts having touched nothing. The old order deleted the
+      // provider's MX first and left the domain with no inbound path at all.
+      const mxBefore = await client.listDnsRecords(zoneId, "MX");
+      if (assessMx(mxBefore).cloudflareRouting === 0) {
+        try {
+          await client.enableEmailRouting(zoneId);
+        } catch (err) {
+          await recordProvisioningEvent(db, domain.id, "provision:enable_refused", "FAILED", {
+            kind: err instanceof CloudflareApiError ? err.kind : "error",
+          });
+          throw err;
+        }
+      }
+      const mxAfter = await client.listDnsRecords(zoneId, "MX");
+      if (assessMx(mxAfter).cloudflareRouting === 0) {
+        await recordProvisioningEvent(db, domain.id, "provision:enable_refused", "FAILED", {
+          reason: "routing MX did not appear; foreign MX left untouched",
+        });
+        return outcome(
+          zoneId,
+          domain.name,
+          domain.id,
+          MailStatus.Failed,
+          false,
+          "Email Routing was enabled but its MX records did not appear — the provider's MX records were left in place, so inbound mail still flows to them.",
+          steps,
+        );
+      }
       const removed = await removeForeignMx(db, client, domain, opts.authorizeTakeover);
       steps.push({
         step: "mx_takeover",
@@ -282,6 +313,18 @@ export async function provisionDomain(
             "Foreign MX records appeared during provisioning",
             steps,
           );
+        }
+        // Same order as the take-over above: routing enabled and visible before the
+        // provider's MX is touched, so a refusal never strands the domain without MX.
+        if (assessMx(mxNow).cloudflareRouting === 0) {
+          try {
+            await client.enableEmailRouting(zoneId);
+          } catch (err) {
+            await recordProvisioningEvent(db, domain.id, "provision:enable_refused", "FAILED", {
+              kind: err instanceof CloudflareApiError ? err.kind : "error",
+            });
+            throw err;
+          }
         }
         await removeForeignMx(db, client, domain, opts.authorizeTakeover);
         mxNow = await client.listDnsRecords(zoneId, "MX");

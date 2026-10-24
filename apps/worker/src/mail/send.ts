@@ -11,6 +11,7 @@ import type { Env } from "../env";
 import { maxSendsPerDay } from "../env";
 import { badRequest } from "../lib/errors";
 import { sanitizeFilename } from "../lib/filename";
+import { sanitizeEmailHtml } from "../security/sanitize-html";
 import { log } from "../lib/logging";
 import { newId, sha256Hex } from "../lib/util";
 import { writeMetric } from "../lib/metrics";
@@ -259,6 +260,13 @@ export async function sendOutbound(
   const baseSubject = (req.subject || parent?.subject || "").slice(0, SEND_LIMITS.maxSubjectChars);
   const subject =
     parent && baseSubject && !/^re:/i.test(baseSubject) ? `Re: ${baseSubject}` : baseSubject;
+  if (req.html) {
+    // Outbound HTML is sanitized the moment it enters the vault — the schema has promised
+    // "sanitised server-side the same way received HTML is", and the stored .eml is what a
+    // later download hands out. https images survive: they are the owner's own choice in a
+    // message being sent, unlike a stranger's tracking pixels in one being read.
+    req.html = sanitizeEmailHtml(req.html, { allowRemoteImages: true });
+  }
   if (!req.text.trim() && !req.html?.trim()) return fail("EMPTY_BODY", "Write something first.");
 
   const prepared = prepareFiles(req.attachments);

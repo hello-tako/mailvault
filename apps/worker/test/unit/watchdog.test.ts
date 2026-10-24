@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The watchdog now also asks a public resolver about every domain it believes can receive
+// mail; a unit test must never depend on what the real internet says about example.com.
+afterEach(() => vi.unstubAllGlobals());
+
+const publicMxAnswer = () =>
+  Promise.resolve(
+    new Response(JSON.stringify({ Status: 0, Answer: [{ type: 15 }] }), {
+      status: 200,
+      headers: { "content-type": "application/dns-json" },
+    }),
+  );
 import {
   AuthPolicy,
   CatchAllStatus,
@@ -98,6 +110,7 @@ const statusWrites = (writes: { sql: string; binds: unknown[] }[]) =>
 
 describe("drift watchdog (read-only against Cloudflare)", () => {
   it("leaves a healthy domain alone apart from its check timestamp", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => publicMxAnswer()));
     const { client, mutations } = stubClient({});
     const { db, writes } = stubDb();
 
@@ -140,6 +153,7 @@ describe("drift watchdog (read-only against Cloudflare)", () => {
   });
 
   it("restores only what it previously marked as drifted", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => publicMxAnswer()));
     const { client } = stubClient({});
     const { db, writes } = stubDb();
     const drifted = domain({ mailStatus: MailStatus.Conflict, conflictType: ConflictType.Drift });
@@ -170,5 +184,54 @@ describe("drift watchdog (read-only against Cloudflare)", () => {
     expect(report.failed).toEqual(["example.com"]);
     expect(report.drifted).toEqual([]);
     expect(writes).toEqual([]);
+  });
+});
+
+describe("watchdog public-DNS probe (the lapsed-registration blind spot)", () => {
+  const dnsJson = (body: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/dns-json" } }));
+
+  it("flags a domain the public internet cannot resolve while Cloudflare looks healthy", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => dnsJson({ Status: 3 })));
+    const { client } = stubClient({});
+    const { db, writes } = stubDb();
+
+    const report = await watchDomains(db, client, [domain()], WORKER);
+
+    expect(report.drifted).toContain("example.com");
+    expect(writes.some((w) => w.binds.join(" ").includes("watchdog:dns_unresolvable"))).toBe(true);
+  });
+
+  it("keeps the domain ok when a public resolver sees its MX", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => dnsJson({ Status: 0, Answer: [{ type: 15 }] })));
+    const { client } = stubClient({});
+    const { db } = stubDb();
+
+    const report = await watchDomains(db, client, [domain()], WORKER);
+
+    expect(report.ok).toContain("example.com");
+    expect(report.drifted).toEqual([]);
+  });
+
+  it("never downgrades a domain when the probe itself fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("probe unreachable"); }));
+    const { client } = stubClient({});
+    const { db } = stubDb();
+
+    const report = await watchDomains(db, client, [domain()], WORKER);
+
+    expect(report.ok).toContain("example.com");
+    expect(report.drifted).toEqual([]);
+  });
+
+  it("does not probe a domain MailVault does not believe is receiving", async () => {
+    const fetchSpy = vi.fn(async () => dnsJson({ Status: 3 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { client } = stubClient({});
+    const { db } = stubDb();
+
+    await watchDomains(db, client, [domain({ mailStatus: MailStatus.Discovered })], WORKER);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

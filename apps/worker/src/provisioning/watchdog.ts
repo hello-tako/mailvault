@@ -9,6 +9,29 @@ import { verifyDeliveryPath } from "./preflight";
 
 const empty = (): DriftReport => ({ checked: 0, ok: [], drifted: [], restored: [], failed: [] });
 
+/**
+ * Ask a public resolver whether the world can see this domain's MX at all — the one fact
+ * no Cloudflare API call can give. Cloudflare's zone can be active and Email Routing
+ * perfectly configured while the registration lapsed and the name answers NXDOMAIN
+ * everywhere else (loiyeuthuong.org, 2026-10). DoH over JSON keeps it one plain fetch.
+ *
+ * `null` means the probe itself could not answer, which is never evidence about the domain.
+ */
+async function publicMxResolvable(name: string): Promise<boolean | null> {
+  try {
+    const res = await fetch(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=MX`,
+      { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { Status?: number; Answer?: { type: number }[] };
+    if (json.Status === 3) return false; // NXDOMAIN: the name itself is gone
+    return (json.Answer ?? []).some((a) => a.type === 15); // 15 = MX
+  } catch {
+    return null;
+  }
+}
+
 function driftReason(path: Awaited<ReturnType<typeof verifyDeliveryPath>>, workerName: string): string {
   if (!path.routing) {
     return "Email Routing is no longer active for this domain — Cloudflare's routing MX records are gone from DNS.";
@@ -25,6 +48,29 @@ async function checkOne(db: D1Database, client: CloudflareClient, d: Domain, wor
   const wasReady = d.mailStatus === MailStatus.Ready;
 
   if (delivering) {
+    // The inside view can be perfect while the outside world cannot resolve the name at
+    // all — a lapsed registration looks healthy to every Cloudflare API. Only domains we
+    // believe can receive mail are probed, so the hourly cost stays at one DoH query each.
+    if (wasReady || d.conflictType === ConflictType.Drift) {
+      const publicMx = await publicMxResolvable(d.name);
+      if (publicMx === false) {
+        const message =
+          "Public resolvers cannot see this domain or its MX — the registration may have " +
+          "lapsed. Cloudflare still shows the zone as healthy, so only senders' logs will " +
+          "say; check the registrar before relying on this address.";
+        await patchDomainProvisioning(db, d.cloudflareZoneId, {
+          mailStatus: MailStatus.Conflict,
+          conflictType: ConflictType.DnsUnresolvable,
+          conflictDetails: { type: ConflictType.DnsUnresolvable, message },
+        });
+        await recordProvisioningEvent(db, d.id, "watchdog:dns_unresolvable", "CONFLICT", {
+          domain: d.name,
+        });
+        log.warn("domain_dns_unresolvable", { zoneId: d.cloudflareZoneId, domain: d.name });
+        report.drifted.push(d.name);
+        return;
+      }
+    }
     // Only resurrect what *we* marked as drift; a domain the owner moved elsewhere (or
     // a conflict MailVault must not touch) keeps whatever state it has.
     if (!wasReady && d.conflictType === ConflictType.Drift) {

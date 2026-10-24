@@ -122,7 +122,15 @@ export const api = {
   dashboard: () => request<DashboardStats>("/dashboard"),
 
   listDomains: () => request<{ items: Domain[] }>("/domains"),
-  syncDomains: () => request<{ discovered: number; items: Domain[] }>("/domains/sync", mutation()),
+  syncDomains: () =>
+    request<{ discovered: number; autoProvisioned: string[]; items: Domain[] }>(
+      "/domains/sync",
+      mutation(),
+    ),
+  /** Opt-in: Sync may itself enable mail on newly discovered zones preflight clears. */
+  getAutoProvision: () => request<{ enabled: boolean }>("/domains/auto-provision"),
+  setAutoProvision: (enabled: boolean) =>
+    request<{ enabled: boolean }>("/domains/auto-provision", mutation({ enabled })),
   verifyDomains: () =>
     request<{ report: DriftReport; items: Domain[] }>("/domains/verify", mutation()),
   preflightDomains: (zoneIds: string[]) =>

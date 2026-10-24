@@ -468,6 +468,13 @@ export const en: Dict = {
   "set.testSkip": " ({n})",
   "set.unsupported": "This browser cannot receive notifications.",
   "set.insecure": "Notifications require an HTTPS origin.",
+  "set.apTitle": "Receiving",
+  "set.apIntro":
+    "When this is on, pressing Sync also enables mail for newly found zones that the safety check clears as ready — a conflicting MX or catch-all still waits for your explicit confirmation, never automatically.",
+  "set.apTurnOn": "Turn on auto-enable",
+  "set.apTurnOff": "Turn off auto-enable",
+  "set.apOn": "Sync now enables mail on clean, newly found zones.",
+  "set.apOff": "Sync only lists new zones; enabling stays manual.",
   "set.passTitle": "Passkey check",
   "set.passIntro":
     "Signing in proves which account you are. This proves the same person is holding this device, and it is asked for before anything that cannot be undone: purging an alias's stored mail, detaching a domain, turning sender checks off, or adding another passkey. It lasts a few minutes, then asks again.",
@@ -1142,7 +1149,15 @@ export const vi: Dict = {
   "set.testSkip": " ({n})",
   "set.unsupported": "Trình duyệt này không nhận được thông báo.",
   "set.insecure": "Cần chạy trên HTTPS mới nhận được thông báo.",
+  "set.apTitle": "Nhận thư",
+  "set.apIntro":
+    "Khi bật, bấm Đồng bộ cũng sẽ kích hoạt thư cho các zone mới tìm thấy mà bước kiểm tra an toàn xác nhận sẵn sàng — MX hoặc catch-all đang xung đột vẫn luôn chờ bạn xác nhận rõ ràng, không bao giờ tự động.",
+  "set.apTurnOn": "Bật tự động kích hoạt",
+  "set.apTurnOff": "Tắt tự động kích hoạt",
+  "set.apOn": "Đồng bộ giờ tự kích hoạt thư cho zone mới sạch.",
+  "set.apOff": "Đồng bộ chỉ liệt kê zone mới; việc kích hoạt vẫn thủ công.",
   "set.passTitle": "Kiểm tra passkey",
+
   "set.passIntro":
     "Đăng nhập chứng minh bạn là tài khoản nào. Passkey chứng minh vẫn là người này đang cầm thiết bị, và được hỏi trước mọi thao tác không hoàn tác được: xoá sạch thư của một bí danh, gỡ tên miền, tắt kiểm tra người gửi, hoặc thêm passkey khác. Phiên này kéo dài vài phút rồi hỏi lại.",
   "set.passRegistered":
