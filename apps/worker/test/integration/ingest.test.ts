@@ -340,6 +340,43 @@ describe("search: FTS5 text + code + alias matching", () => {
     await deleteMessage(DB, row!.id);
     expect((await list("temporary")).total).toBe(0);
   });
+
+  it("finds a word that lives past the preview, in the body itself (C1)", async () => {
+    await seedAlias("bodysearch@notify.example");
+    const filler = "opening line with nothing rare in it. ".repeat(12);
+    await deliver(
+      "bodysearch@notify.example",
+      "A plain subject",
+      filler + " zzqbodymarker42 the sentence worth finding again.",
+      "bodysearch-1",
+    );
+    const hit = await list("zzqbodymarker42");
+    expect(hit.items.map((i: any) => i.subject)).toContain("A plain subject");
+    const miss = await list("zzqbodymarker99");
+    expect(miss.items).toHaveLength(0);
+  });
+
+  it("backfills bodies of mail stored before the column existed", async () => {
+    await seedAlias("backfill@notify.example");
+    const filler = "quiet opening with nothing rare. ".repeat(14);
+    await deliver(
+      "backfill@notify.example",
+      "Before the index grew",
+      filler + " zzqoldbody77 the old sentence.",
+      "backfill-1",
+    );
+    // Pretend migration 0022 just ran: the row exists, its body is empty.
+    await DB.prepare(
+      `UPDATE messages_fts SET body = '' WHERE message_id = (SELECT id FROM messages WHERE provider_message_id = 'backfill-1@github.com')`,
+    ).run();
+    expect((await list("zzqoldbody77")).items).toHaveLength(0);
+
+    const { backfillFtsBodies } = await import("../../src/mail/fts-backfill");
+    const done = await backfillFtsBodies(DB, BUCKET, 10);
+    expect(done.remaining).toBe(0);
+    expect(done.processed).toBeGreaterThan(0);
+    expect((await list("zzqoldbody77")).items).toHaveLength(1);
+  });
 });
 
 /*
@@ -508,6 +545,7 @@ describe("staged ingest and its commit", () => {
     await deleteMessage(DB, accepted!.messageId);
     await BUCKET.delete([accepted!.rawKey, accepted!.parsedKey]);
   });
+
 });
 
 /*

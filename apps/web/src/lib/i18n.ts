@@ -567,6 +567,12 @@ export const en: Dict = {
   "composer.attachOriginal": "Attach the original (.eml)",
   "composer.attachOriginalHint":
     "The untouched message rides along as a file; uncheck to quote it as text instead.",
+  "msg.muteSender": "Mute this sender",
+  "msg.unmuteSender": "Unmute this sender",
+  "alias.mute": "Mute notifications",
+  "alias.unmute": "Unmute notifications",
+  "alias.muteHint":
+    "Mail still arrives and stays searchable — only the ping, toast and badge stay quiet.",
   "msg.forward": "Forward",
   "msg.forwardSent": "Forwarded — the new message is in Sent.",
   "composer.replyTitle": "Reply",
@@ -1268,6 +1274,12 @@ export const vi: Dict = {
   "composer.attachOriginal": "Đính kèm bản gốc (.eml)",
   "composer.attachOriginalHint":
     "Thư gốc đi nguyên vẹn như một tệp; bỏ chọn để trích thành văn bản thay thế.",
+  "msg.muteSender": "Immiting người gửi này",
+  "msg.unmuteSender": "Bỏ im lặng người gửi này",
+  "alias.mute": "Tắt thông báo",
+  "alias.unmute": "Bật lại thông báo",
+  "alias.muteHint":
+    "Thư vẫn về và vẫn tìm được — chỉ ping, toast và badge là im.",
   "msg.forward": "Chuyển tiếp",
   "msg.forwardSent": "Đã chuyển tiếp — thư mới nằm trong Đã gửi.",
     "composer.replyTitle": "Trả lời",

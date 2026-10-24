@@ -61,6 +61,17 @@ export function MessageDetail({
   const markedRef = useRef<string | null>(null);
 
   const { data, error, loading, reload } = useAsync(() => api.getMessage(id, remoteImages), [id, remoteImages]);
+  // The sender's domain, lowercase, is the mute scope — one noisy sender, one switch.
+  const senderDomain = (data?.envelopeFrom ?? "").split("@")[1]?.toLowerCase() ?? "";
+  const { data: notifPrefs, reload: reloadNotifPrefs } = useAsync(
+    () => api.listNotificationPrefs(),
+    [],
+  );
+  const senderMuted =
+    !!senderDomain &&
+    !!notifPrefs?.items.some(
+      (p) => p.scopeType === "sender_domain" && p.scopeValue === senderDomain && p.action === "mute",
+    );
   /*
    * The conversation, asked for by root rather than by this message: opening any reply
    * has to show the whole thread, including the one you are reading.
@@ -240,6 +251,22 @@ export function MessageDetail({
                 label={t("common.more")}
                 items={[
                   { label: t("msg.forward"), onSelect: () => setForwarding(true) },
+                  ...(senderDomain
+                    ? [
+                        {
+                          label: t(senderMuted ? "msg.unmuteSender" : "msg.muteSender"),
+                          onSelect: () => {
+                            void api
+                              .setNotificationPref({
+                                scopeType: "sender_domain",
+                                scopeValue: senderDomain,
+                                action: senderMuted ? "all" : "mute",
+                              })
+                              .then(reloadNotifPrefs);
+                          },
+                        },
+                      ]
+                    : []),
                   { label: t(data.starred ? "msg.unstar" : "msg.star"), onSelect: () => void toggleStar() },
                   {
                     label: t("msg.downloadEml"),

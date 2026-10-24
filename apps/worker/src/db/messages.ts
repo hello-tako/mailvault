@@ -231,15 +231,15 @@ export async function countSentSince(db: D1Database, sinceIso: string): Promise<
 export async function indexMessage(
   db: D1Database,
   messageId: string,
-  text: { subject: string | null; preview: string | null; sender: string | null },
+  text: { subject: string | null; preview: string | null; sender: string | null; body?: string | null },
 ): Promise<void> {
   await db.batch([
     db.prepare(`DELETE FROM messages_fts WHERE message_id = ?1`).bind(messageId),
     db
       .prepare(
-        `INSERT INTO messages_fts (message_id, subject, preview, sender) VALUES (?1,?2,?3,?4)`,
+        `INSERT INTO messages_fts (message_id, subject, preview, sender, body) VALUES (?1,?2,?3,?4,?5)`,
       )
-      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? ""),
+      .bind(messageId, text.subject ?? "", text.preview ?? "", text.sender ?? "", text.body ?? ""),
   ]);
 }
 
