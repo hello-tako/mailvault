@@ -162,6 +162,46 @@ export async function deleteSubscription(db: D1Database, endpoint: string): Prom
   return Number((res.meta as { changes?: number } | undefined)?.changes ?? 0);
 }
 
+/** Devices that can be interrupted (D4). The endpoint is a credential and never leaves
+ * this table; what the owner sees is the label, the browser, and how it has been doing. */
+export async function listDevices(db: D1Database): Promise<
+  Array<{ id: string; label: string | null; userAgent: string | null; fails: number; lastOkAt: string | null; createdAt: string }>
+> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, label, user_agent, fails, last_ok_at, created_at FROM push_subscriptions ORDER BY created_at DESC`,
+    )
+    .all<{
+      id: string;
+      label: string | null;
+      user_agent: string | null;
+      fails: number;
+      last_ok_at: string | null;
+      created_at: string;
+    }>();
+  return (results ?? []).map((r) => ({
+    id: r.id,
+    label: r.label,
+    userAgent: r.user_agent,
+    fails: Number(r.fails ?? 0),
+    lastOkAt: r.last_ok_at,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function setDeviceLabel(db: D1Database, id: string, label: string): Promise<boolean> {
+  const res = await db
+    .prepare(`UPDATE push_subscriptions SET label = ?2 WHERE id = ?1`)
+    .bind(id, label)
+    .run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+export async function deleteDevice(db: D1Database, id: string): Promise<boolean> {
+  const res = await db.prepare(`DELETE FROM push_subscriptions WHERE id = ?1`).bind(id).run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
 export async function countSubscriptions(db: D1Database): Promise<number> {
   const row = await db.prepare(`SELECT COUNT(*) AS c FROM push_subscriptions`).first<{ c: number }>();
   return Number(row?.c ?? 0);

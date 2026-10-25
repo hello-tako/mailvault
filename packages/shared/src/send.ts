@@ -138,6 +138,20 @@ export const ForwardInputSchema = z.object({
 });
 export type ForwardInput = z.infer<typeof ForwardInputSchema>;
 
+/** The compose-in-progress, saved server-side so it follows the owner between devices
+ * (B4). One slot per composer: "compose", or "reply-<message id>". Address lines are kept
+ * as typed — they are a draft, not a recipient list, and are validated only when sent. */
+export const DraftInputSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  fromAddress: z.string().trim().max(254).optional(),
+  to: z.string().max(2000).optional(),
+  cc: z.string().max(2000).optional(),
+  bcc: z.string().max(2000).optional(),
+  subject: z.string().max(SEND_LIMITS.maxSubjectChars).optional(),
+  text: z.string().max(200_000).optional(),
+  replyToMessageId: z.string().min(1).optional(),
+});
+
 /** Autocomplete input: a fragment of an address or a display name, nothing more. */
 export const RecipientQuerySchema = z.object({ q: z.string().trim().max(80).optional() });
 
