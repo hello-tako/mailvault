@@ -1316,3 +1316,51 @@ tr:last-child td { border-bottom: 0; }
      the first message has to start near the top (measured contract in mailboxes.spec). */
   .list-sep { padding: 5px 4px 1px; font-size: 11px; }
 }
+
+
+/* Compact list (C6): more mail per screen, same reading order. */
+.msglist.compact .msg { padding-block: 4px; }
+.msglist.compact .msg-preview { display: none; }
+
+/* The draggable divider between list and pane (C13). */
+.pane-handle {
+  width: 7px;
+  margin-left: -3px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.pane-handle:hover { background: var(--line, #d0d4da); border-radius: 4px; }
+
+/* Thread excerpts (C8): the words under a conversation's one-liners. */
+.thread-excerpt {
+  margin: 4px 0 8px 24px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line, #d0d4da);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+  opacity: 0.85;
+}
+
+/* Printing a message prints the message (C7): the app around it steps aside. */
+@media print {
+  .app > aside,
+  .sidebar,
+  .toolbar,
+  .msglist,
+  .bulkbar,
+  .tabs,
+  .toast-host,
+  .pane-handle,
+  .mail-actions,
+  .body-tools { display: none !important; }
+  .mail-split { display: block !important; }
+  .mail-pane, .pane-body { position: static !important; width: 100% !important; max-width: 100% !important; overflow: visible !important; }
+  .email-frame { max-height: none !important; }
+}
+
+/* A longer actions menu stays put instead of growing past the pane (C-batch). */
+.menu-pop { max-height: min(60vh, 420px); overflow-y: auto; }

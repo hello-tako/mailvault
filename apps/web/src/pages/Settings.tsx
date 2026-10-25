@@ -24,9 +24,35 @@ function AppearanceCard() {
   const current = lang();
   const { choice } = useTheme();
   const [insights, setInsights] = useState(() => insightsOpen());
+  const [, setDensity] = useState(localStorage.getItem("mailvault-density") ?? "cozy");
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>{t("set.appearanceTitle")}</h2>
+      <h2 style={{ marginTop: 0 }}>{t("set.appearanceTitle")}</h2>
+
+      <div className="setting-row">
+        <span className="label">
+          <b>{t("set.density")}</b>
+          <span className="faint">{t("set.densityCozy")} / {t("set.densityCompact")}</span>
+        </span>
+        <div className="seg" role="group" aria-label={t("set.density")}>
+          {(["cozy", "compact"] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              aria-pressed={(localStorage.getItem("mailvault-density") ?? "cozy") === d}
+              className={(localStorage.getItem("mailvault-density") ?? "cozy") === d ? "active" : ""}
+              onClick={() => {
+                localStorage.setItem("mailvault-density", d);
+                setDensity(d);
+              }}
+            >
+              {t(d === "cozy" ? "set.densityCozy" : "set.densityCompact")}
+            </button>
+          ))}
+        </div>
+      </div>
+
 
       <div className="setting-row">
         <span className="label">

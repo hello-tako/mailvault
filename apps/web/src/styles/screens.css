@@ -139,7 +139,13 @@
  * stays put and the message opens beside it; on a handset the same row still navigates to
  * its own screen, because there is no beside.
  */
-.mail-split { display: grid; grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+.mail-split {
+  display: grid;
+  grid-template-columns: minmax(360px, 460px) 7px minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+}
 .mail-list { min-width: 0; }
 /* A 460px column is a phone, not a desktop row: sender, subject and preview truncated into
    what is left of it after the tick and the time say nothing. The pane therefore keeps the

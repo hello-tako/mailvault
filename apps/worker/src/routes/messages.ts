@@ -37,6 +37,7 @@ import {
   sendReply,
 } from "../mail/send";
 import { embedCidImages } from "../mail/inline-images";
+import { readInvite, readVCard, type CalendarInvite, type VCard } from "../mail/calendars";
 import { sanitizeFilename } from "../lib/filename";
 import { getObject } from "../storage/r2";
 import { searchMessageIds, semanticEnabled } from "../lib/semantic";
@@ -45,6 +46,7 @@ import { requireIrreversibleStepUp, STEP_UP_HEADER } from "../security/irreversi
 import { actorOf, parseQuery, readJson } from "./_helpers";
 
 const IdParam = z.object({ id: z.string().min(1) });
+const TranslateBodySchema = z.object({ to: z.enum(["vi", "en"]) });
 const AttachmentParam = z.object({ messageId: z.string().min(1), attachmentId: z.string().min(1) });
 
 /** `receivedAt|id` → the pair, or undefined when the client sent something unusable. */
@@ -196,12 +198,55 @@ export const messagesRoute = new Hono<AppEnv>()
       });
     }
 
+    // Attachments a mailbox can read by itself (C9): an invite and a contact card, parsed
+    // out of their files when they are small — the download stays the source of truth.
+    let calendar: CalendarInvite | null = null;
+    let vcard: VCard | null = null;
+    for (const att of detail.attachments) {
+      if (calendar && vcard) break;
+      const row = await c.env.DB
+        .prepare(`SELECT r2_key, size FROM attachments WHERE id = ?1`)
+        .bind(att.id)
+        .first<{ r2_key: string; size: number }>();
+      if (!row) continue;
+      const isIcs = (att.contentType.startsWith("text/calendar") || /\.ics$/i.test(att.filename)) && !calendar;
+      const isVcf = (att.contentType.startsWith("text/vcard") || /\.vcf$/i.test(att.filename)) && !vcard;
+      if (isIcs) calendar = await readInvite(c.env.MAIL_BUCKET, row.r2_key, Number(row.size));
+      else if (isVcf) vcard = await readVCard(c.env.MAIL_BUCKET, row.r2_key, Number(row.size));
+    }
+
     return c.json({
       ...body,
       textBody: parsed?.text ?? null,
       htmlBody,
       parseDegraded: body.parseDegraded || parsed?.degraded === true,
+      calendar,
+      vcard,
     });
+  })
+
+  /** Read a message in the owner's own language (C11). The translation is made on demand,
+   * returned to this reader only, and never stored: the vault keeps what arrived. */
+  .post("/api/messages/:id/translate", async (c) => {
+    const { id } = IdParam.parse({ id: c.req.param("id") });
+    const { to } = await readJson(c, TranslateBodySchema);
+    if (!c.env.AI) {
+      throw new AppError(503, "AI_UNAVAILABLE", "This server has no Workers AI binding configured.");
+    }
+    const detail = await getMessageDetail(c.env.DB, id);
+    if (!detail) throw notFound("Message not found");
+    const parsed = await readParsed(c.env.MAIL_BUCKET, detail.parsedR2Key);
+    const source = (parsed?.text ?? "").slice(0, 20_000).trim();
+    if (!source) throw new AppError(400, "NOTHING_TO_TRANSLATE", "This message has no readable text.");
+    const run = (await c.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [
+        { role: "system", content: `Translate the user's email into ${to}. Reply with the translation only, no commentary.` },
+        { role: "user", content: source },
+      ],
+    })) as { response?: string };
+    const text = (run.response ?? "").trim();
+    if (!text) throw new AppError(502, "TRANSLATE_FAILED", "The model returned nothing.");
+    return c.json({ to, text });
   })
 
   /** Mark everything the current list would show as unread, read (C5). */

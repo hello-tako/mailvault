@@ -256,6 +256,7 @@ export function Composer({
   onClose,
   onSent,
   onScheduled,
+  initialCc,
 }: {
   replyTo?: MessageDetail | null;
   /** Forwarding one stored message: compose fields plus the original, quoted or attached. */
@@ -268,6 +269,8 @@ export function Composer({
   onSent: (outcome: SendOutcome) => void;
   /** A scheduled send left the composer waiting, not gone (B6). */
   onScheduled?: (scheduled: { id: string; sendAt: string }) => void;
+  /** Reply-all's copy line, prefilled (C8). */
+  initialCc?: string;
 }) {
   const isReply = !!replyTo;
   const isForward = !!forwardOf;
@@ -287,7 +290,7 @@ export function Composer({
   const [restoredDraft] = useState(() => (replyTo ? null : readDraft()));
   const [from, setFrom] = useState(replyTo?.aliasAddress ?? restoredDraft?.from ?? sendableAliases[0]?.address ?? "");
   const [to, setTo] = useState(restoredDraft?.to ?? "");
-  const [cc, setCc] = useState(restoredDraft?.cc ?? "");
+  const [cc, setCc] = useState(initialCc ?? restoredDraft?.cc ?? "");
   const [bcc, setBcc] = useState("");
   // A reply starts from the subject it answers (the Worker adds "Re:" if it is missing);
   // the owner can still reword it, and bring more people into the copy line.
