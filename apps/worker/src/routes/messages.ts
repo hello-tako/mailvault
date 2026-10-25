@@ -36,6 +36,7 @@ import {
   sendIdempotencyKey,
   sendReply,
 } from "../mail/send";
+import { embedCidImages } from "../mail/inline-images";
 import { sanitizeFilename } from "../lib/filename";
 import { getObject } from "../storage/r2";
 import { searchMessageIds, semanticEnabled } from "../lib/semantic";
@@ -179,10 +180,26 @@ export const messagesRoute = new Hono<AppEnv>()
     const parsed = await readParsed(c.env.MAIL_BUCKET, parsedR2Key);
     const allowRemote = ["1", "true"].includes((c.req.query("remoteImages") ?? "").toLowerCase());
 
+    // Inline images resolve server-side into data URLs (C2): the sanitizer keeps cid:
+    // references, and each becomes the pixels of the attachment it names — no network, so
+    // remote tracking images stay blocked exactly as before.
+    let htmlBody = parsed?.html
+      ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote, keepCidImages: true })
+      : null;
+    if (htmlBody?.includes("cid:")) {
+      htmlBody = await embedCidImages(htmlBody, detail.attachments, c.env.MAIL_BUCKET, async (attachmentId) => {
+        const row = await c.env.DB
+          .prepare(`SELECT r2_key AS k FROM attachments WHERE id = ?1`)
+          .bind(attachmentId)
+          .first<{ k: string }>();
+        return row?.k ?? null;
+      });
+    }
+
     return c.json({
       ...body,
       textBody: parsed?.text ?? null,
-      htmlBody: parsed?.html ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote }) : null,
+      htmlBody,
       parseDegraded: body.parseDegraded || parsed?.degraded === true,
     });
   })
@@ -327,9 +344,14 @@ export const messagesRoute = new Hono<AppEnv>()
     if (!obj) throw notFound("Attachment content unavailable");
 
     const safeName = sanitizeFilename(att.safe_filename || att.filename);
+    // A picture the owner asked to see opens in its own tab rather than downloading; the
+    // bytes come from the same authenticated route either way, and nosniff keeps it honest.
+    const wantInline =
+      ["1", "true"].includes((c.req.query("inline") ?? "").toLowerCase()) &&
+      (att.content_type || "").startsWith("image/");
     const headers = new Headers({
       "Content-Type": att.content_type || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${safeName.replace(/"/g, "")}"`,
+      "Content-Disposition": `${wantInline ? "inline" : "attachment"}; filename="${safeName.replace(/"/g, "")}"`,
       "Content-Length": String(obj.size),
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "private, no-store",

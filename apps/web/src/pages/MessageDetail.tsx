@@ -383,6 +383,16 @@ export function MessageDetail({
                     <a className="small" href={attachmentHref(data.id, a.id)} rel="noreferrer">
                       {t("msg.download")}
                     </a>
+                    {a.contentType.startsWith("image/") ? (
+                      <a
+                        className="small"
+                        href={`${attachmentHref(data.id, a.id)}?inline=1`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t("msg.viewImage")}
+                      </a>
+                    ) : null}
                   </div>
                 ))}
               </div>
