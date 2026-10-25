@@ -145,10 +145,12 @@ describe("pushToAll is payload-free and self-healing", () => {
       const auth = (call.init.headers as Record<string, string>).Authorization;
       expect(auth).toMatch(/^vapid t=[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+\./);
       expect(auth).toContain(`k=${vapidPublicKey(jwk)}`);
-      expect((call.init.headers as Record<string, string>).TTL).toBe("3600");
+      expect((call.init.headers as Record<string, string>).TTL).toBe("21600"); // D6: six hours to be found
       // An urgency hint below `normal` invites the push service to batch, which turned
       // "new mail" into "mail that arrived two minutes ago".
-      expect(Object.keys(call.init.headers as Record<string, string>)).not.toContain("Urgency");
+      // D6: `high`, explicitly. `low` batched OTP mail into minutes-late arrivals (measured);
+      // a personal mailbox has nothing to defer, so the header now asks for prompt delivery.
+      expect((call.init.headers as Record<string, string>).Urgency).toBe("high");
     }
   });
 

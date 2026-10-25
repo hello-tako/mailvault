@@ -23,6 +23,7 @@ import { getSetting, setSetting } from "./db/settings";
 import { backfillFtsBodies } from "./mail/fts-backfill";
 import { processScheduledSend } from "./mail/scheduled";
 import { isNotificationMuted } from "./db/notifications";
+import { digestDueAt, isQuietAt, parseQuietHours } from "./lib/quiet-hours";
 import { drainDeletionJobs } from "./db/deletions";
 
 // Durable Object classes must be exported from the entry module.
@@ -175,6 +176,28 @@ export default {
         reason: `checked=${report.checked} drifted=${report.drifted.length} restored=${report.restored.length} failed=${report.failed.length}`,
         commitMs: timer.stop(),
       });
+      // D7: drift is out loud, once a day at most — silent drift is how mail quietly stops.
+      if (report.drifted.length > 0) {
+        const day = new Date().toISOString().slice(0, 10);
+        if ((await getSetting(env.DB, "lastDriftAlertDay")) !== day) {
+          await setSetting(env.DB, "lastDriftAlertDay", day);
+          ctx.waitUntil(
+            recordOpsFailure(env, "ingest-commit", `watchdog drift: ${report.drifted.join(", ")}`).catch(() => undefined),
+          );
+        }
+      }
+
+      // D2: the hour the quiet window ends is the digest hour — one push, then the phone
+      // says what piled up, through the same content-free path as any new mail.
+      const quiet = parseQuietHours(await getSetting(env.DB, "quietHours"));
+      if (quiet && digestDueAt(quiet, new Date(), await getSetting(env.DB, "lastDigestDay"))) {
+        await setSetting(env.DB, "lastDigestDay", new Date().toISOString().slice(0, 10));
+        ctx.waitUntil(
+          Promise.allSettled([pushToAll(env, env.DB), notifyNewMail(env)]).then(() => undefined),
+        );
+        log.info("quiet_hours_digest_sent", {});
+      }
+
       log.info("watchdog_run", {
         cron: controller.cron,
         checked: report.checked,
@@ -219,8 +242,12 @@ async function consumeIngestBatch(
           aliasId: message.body.aliasId,
           envelopeFrom: message.body.envelopeFrom,
         });
+        const quiet = parseQuietHours(await getSetting(env.DB, "quietHours"));
         if (muted) {
           writeMetric(env, "notify", { outcome: "skipped", reason: "muted" });
+        } else if (quiet && isQuietAt(quiet, new Date())) {
+          // Quiet hours (D2): the mail is stored, the interruption waits for the digest.
+          writeMetric(env, "notify", { outcome: "skipped", reason: "quiet_hours" });
         } else {
           // Notify only after the mail is durable, and detached: a slow or dead push
           // endpoint must never affect delivery or make the message retry.

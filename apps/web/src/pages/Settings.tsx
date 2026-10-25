@@ -464,6 +464,73 @@ function ContactsCard() {
   );
 }
 
+/** Quiet hours (D2): the interruption sleeps; the digest wakes it once when the window ends. */
+function QuietHoursCard() {
+  const { data, reload } = useAsync(() => api.getQuietHours(), []);
+  const [start, setStart] = useState("22:00");
+  const [end, setEnd] = useState("07:00");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (data?.quietHours) {
+      const fmt = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+      setStart(fmt(data.quietHours.startMin));
+      setEnd(fmt(data.quietHours.endMin));
+    }
+  }, [data]);
+
+  const toMin = (raw: string): number => {
+    const [h, m] = raw.split(":").map(Number);
+    return Math.min(1439, Math.max(0, (h || 0) * 60 + (m || 0)));
+  };
+
+  return (
+    <div className="card mt">
+      <h2 style={{ marginTop: 0 }}>{t("set.quietTitle")}</h2>
+      <p className="muted" style={{ marginTop: 0 }}>{t("set.quietIntro")}</p>
+      <div className="row wrap" style={{ gap: 10 }}>
+        <label>
+          {t("set.quietFrom")}{" "}
+          <input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
+        </label>
+        <label>
+          {t("set.quietTo")}{" "}
+          <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
+        </label>
+        {data?.quietHours ? (
+          <button
+            disabled={busy}
+            className="ghost small"
+            onClick={() => {
+              setBusy(true);
+              void api.clearQuietHours().then(reload).finally(() => setBusy(false));
+            }}
+          >
+            {t("set.quietOff")}
+          </button>
+        ) : null}
+        <button
+          className="small"
+          disabled={busy || start === end}
+          onClick={() => {
+            setBusy(true);
+            void api
+              .setQuietHours({
+                startMin: toMin(start),
+                endMin: toMin(end),
+                tzOffsetMin: -new Date().getTimezoneOffset(),
+              })
+              .then(reload)
+              .finally(() => setBusy(false));
+          }}
+        >
+          {t("set.quietSave")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
 
   const [state, setState] = useState<PushState | null>(null);
@@ -629,6 +696,7 @@ export function Settings() {
 
       <PasskeysCard />
       <ContactsCard />
+      <QuietHoursCard />
       <AutoProvisionCard />
       <SemanticCard />
 

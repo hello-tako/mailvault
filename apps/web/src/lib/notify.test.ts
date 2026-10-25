@@ -10,7 +10,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 type Summary = Record<string, unknown>;
 
 interface Notify {
-  newMailNote: () => Promise<{ title: string; body: string; tag: string; url: string }>;
+  newMailNote: () => Promise<{ title: string; body: string; tag: string; url: string; renotify?: boolean }>;
   pickNewMail: (items: Array<Summary | null> | null, now: number) => Summary | null;
   senderLabel: (item: Summary) => string;
   safeSubject: (item: Summary) => string;
@@ -116,7 +116,9 @@ describe("building the notification", () => {
     expect(result.title).toBe("GitHub");
     expect(result.body).toBe("Your verification code");
     expect(result.url).toBe("/#/messages/m7");
-    expect(result.tag).toBe("mailvault-m7");
+    // D3: one stack, not a spiral — renotify replaces, the deep link still lands on m7.
+    expect(result.tag).toBe("mailvault-new-mail");
+    expect(result.renotify).toBe(true);
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/messages?filter=unread&limit=10", expect.objectContaining({ cache: "no-store" }));
   });
 

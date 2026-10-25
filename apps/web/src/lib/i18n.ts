@@ -609,6 +609,13 @@ export const en: Dict = {
   "msg.scheduled": "Scheduled — it sends when its moment comes; Sent shows a cancel until then.",
   "inbox.scheduledStrip": "{n} send(s) waiting:",
   "inbox.scheduledCancel": "Cancel · {subject}",
+  "set.quietTitle": "Quiet hours",
+  "set.quietIntro":
+    "While these hours run, mail keeps arriving and stays searchable — the ping, toast and badge wait, and one summary arrives when the window ends.",
+  "set.quietFrom": "From",
+  "set.quietTo": "To",
+  "set.quietSave": "Save",
+  "set.quietOff": "Turn off",
   "set.contactsTitle": "Contacts",
   "set.contactsIntro":
     "Addresses you chose to keep. The composer offers them first; history fills the rest.",
@@ -1374,7 +1381,14 @@ export const vi: Dict = {
   "msg.scheduled": "Đã hẹn giờ — thư sẽ đi đúng lúc; Đã gửi còn nút huỷ tới khi đó.",
   "inbox.scheduledStrip": "{n} thư chờ gửi:",
   "inbox.scheduledCancel": "Huỷ · {subject}",
-  "set.contactsTitle": "Danh bạ",
+"set.quietTitle": "Giờ yên tĩnh",
+  "set.quietIntro":
+    "Trong khung giờ này thư vẫn về và vẫn tìm được — ping, toast và badge nghỉ; hết giờ có đúng một bản tổng hợp.",
+  "set.quietFrom": "Từ",
+  "set.quietTo": "Đến",
+  "set.quietSave": "Lưu",
+  "set.quietOff": "Tắt",
+    "set.contactsTitle": "Danh bạ",
   "set.contactsIntro":
     "Các địa chỉ bạn chọn giữ lại. Ô người nhận ưu tiên gợi ý từ đây; lịch sử thư thay phần còn lại.",
   "set.addContact": "Thêm liên hệ",

@@ -97,7 +97,7 @@ function noteCopy() {
 }
 
 function genericNote() {
-  return { title: "MailVault", body: noteCopy().arrived, tag: "mailvault-new-mail", url: "/#/inbox" };
+  return { title: "MailVault", body: noteCopy().arrived, tag: "mailvault-new-mail", renotify: true, url: "/#/inbox" };
 }
 
 self.addEventListener("message", (event) => {
@@ -167,7 +167,10 @@ async function newMailNote() {
   return {
     title: senderLabel(picked),
     body: safeSubject(picked),
-    tag: "mailvault-" + picked.id,
+    // One stack rather than a spiral (D3): renotify replaces the previous notification,
+    // while the deep link still opens this exact message.
+    tag: "mailvault-new-mail",
+    renotify: true,
     url: "/#/messages/" + picked.id,
   };
 }
@@ -176,6 +179,10 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     newMailNote().then((note) =>
       self.registration.showNotification(note.title, {
+        actions: [
+          { action: "read", title: "Mark read" },
+          { action: "archive", title: "File" },
+        ],
         body: note.body,
         icon: "/icons/icon-192.png",
         badge: "/icons/icon-192.png",
@@ -187,7 +194,36 @@ self.addEventListener("push", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
+  const note = event.notification;
+  const id = note.data && note.data.url ? String(note.data.url).split("/").pop() : null;
+  if (event.action === "read" || event.action === "archive") {
+    // D3: act without opening anything. Same-origin fetches carry the CSRF header the app
+    // itself uses; a failed action is a no-op — the app remains the source of truth.
+    event.waitUntil(
+      (async () => {
+        try {
+          if (event.action === "read" && id) {
+            await fetch(`/api/messages/${id}/read`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json", "x-mailvault": "1" },
+              body: JSON.stringify({ isRead: true }),
+            });
+          } else if (event.action === "archive" && id) {
+            await fetch("/api/messages/bulk", {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-mailvault": "1" },
+              body: JSON.stringify({ action: "archive", ids: [id] }),
+            });
+          }
+        } catch {
+          /* no-op: the app stays the source of truth */
+        }
+        note.close();
+      })(),
+    );
+    return;
+  }
+  note.close();
   const target = (event.notification.data && event.notification.data.url) || "/";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
