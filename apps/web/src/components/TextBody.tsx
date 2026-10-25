@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { t } from "../lib/i18n";
 
 /**
  * Plain-text mail is not one thing. A security notice is paragraphs; an OTP sits on its own
@@ -93,12 +94,30 @@ function Linkified({ line }: { line: string }) {
   );
 }
 
+/** A block is a quoted reply when most of its lines carry the ">" marker or it opens with
+ * the "On … wrote:" convention: history the owner has usually already read once. */
+function isQuotedReply(block: string): boolean {
+  const lines = block.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 3) return false;
+  const marked = lines.filter((l) => /^\s*>/.test(l)).length;
+  return marked / lines.length >= 0.6 || /^On .+wrote:\s*$/i.test(lines[0] ?? "");
+}
+
 export function TextBody({ text }: { text: string }) {
   const blocks = useMemo(() => text.split(BLOCKS).filter((b) => b.trim().length > 0), [text]);
 
   return (
     <div className="text-body">
       {blocks.map((block, i) => {
+        if (isQuotedReply(block)) {
+          // Folded, not hidden: one tap brings the history back exactly as it arrived.
+          return (
+            <details key={i} className="quote-fold">
+              <summary>{t("msg.quotedReply", { n: block.split(/\r?\n/).length })}</summary>
+              <pre className="text-plain">{block}</pre>
+            </details>
+          );
+        }
         if (isPreformatted(block)) {
           return (
             <pre key={i} className="text-plain">

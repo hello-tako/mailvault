@@ -243,6 +243,23 @@ export async function indexMessage(
   ]);
 }
 
+/**
+ * One switch for the whole pile (plan C5): mark everything the current list query would
+ * show as unread, read. The same filters the list builds decide the rows, so "mark all"
+ * inside one mailbox or one search means exactly what the owner is looking at.
+ */
+export async function markAllRead(db: D1Database, query: ListInput): Promise<number> {
+  const { where, params } = buildListFilters(query);
+  const res = await db
+    .prepare(
+      `UPDATE messages SET is_read = 1
+       WHERE is_read = 0 AND id IN (SELECT m.id ${SELECT_LIST} WHERE ${where})`,
+    )
+    .bind(...params)
+    .run();
+  return Number(res.meta.changes ?? 0);
+}
+
 export async function dedupeKeyExists(db: D1Database, dedupeKey: string): Promise<boolean> {
   const row = await db
     .prepare(`SELECT 1 AS x FROM messages WHERE dedupe_key = ?1`)

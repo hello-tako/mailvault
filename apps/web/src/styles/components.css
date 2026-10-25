@@ -1256,3 +1256,63 @@ tr:last-child td { border-bottom: 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Day separators (C5): the calendar a long list reads by. */
+.list-sep {
+  list-style: none;
+  padding: var(--sp-3, 12px) 4px 4px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint, #8a8f98);
+}
+
+/* A quoted reply, folded to one line until asked for (C4). */
+.quote-fold {
+  margin: 8px 0;
+}
+.quote-fold > summary {
+  cursor: pointer;
+  color: var(--ink-faint, #8a8f98);
+  font-size: 13px;
+  padding: 6px 0;
+  user-select: none;
+}
+.quote-fold > summary:hover { color: var(--ink, inherit); }
+.quote-fold > pre {
+  border-left: 3px solid var(--line, #d0d4da);
+  margin: 4px 0 8px;
+  padding-left: 10px;
+  opacity: 0.85;
+}
+
+/* The ? list: every key the app answers to. */
+.help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.help-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.help-list kbd {
+  min-width: 64px;
+  text-align: center;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  border: 1px solid var(--line, #d0d4da);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+/* The unread pile's switch is a desktop convenience; on a phone the strip belongs to the tabs. */
+@media (max-width: 899px) {
+  .toolbar .mark-all { display: none; }
+  /* A day separator is still worth its line on a phone, but not the desktop's padding:
+     the first message has to start near the top (measured contract in mailboxes.spec). */
+  .list-sep { padding: 5px 4px 1px; font-size: 11px; }
+}

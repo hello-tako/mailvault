@@ -18,7 +18,7 @@ import {
   requestMessageDeletion,
   requestMessagesDeletion,
 } from "../db/deletions";
-import {
+import { markAllRead,
   findAttachment,
   getMessageDetail,
   getMessageRow,
@@ -185,6 +185,15 @@ export const messagesRoute = new Hono<AppEnv>()
       htmlBody: parsed?.html ? sanitizeEmailHtml(parsed.html, { allowRemoteImages: allowRemote }) : null,
       parseDegraded: body.parseDegraded || parsed?.degraded === true,
     });
+  })
+
+  /** Mark everything the current list would show as unread, read (C5). */
+  .post("/api/messages/read-all", async (c) => {
+    const parsed = parseQuery(c, MessageListQuerySchema);
+    const { direction: _direction, threaded: _threaded, before: _before, ...query } = parsed;
+    const changed = await markAllRead(c.env.DB, { ...query, limit: 0, offset: 0 });
+    log.info("messages_marked_all_read", { actor: actorOf(c).email, changed });
+    return c.json({ changed });
   })
 
   .patch("/api/messages/:id/read", async (c) => {

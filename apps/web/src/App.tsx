@@ -7,7 +7,7 @@ import { useTheme } from "./lib/theme";
 import { IconAlias, IconGauge, IconGlobe, IconInbox, IconSearch, IconSliders, VaultMark } from "./components/Icons";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
-import { Loading } from "./components/ui";
+import { Loading, Modal } from "./components/ui";
 import { NewMailToast } from "./components/NewMailToast";
 import { MailboxRail } from "./components/mail/MailboxRail";
 import { Dashboard } from "./pages/Dashboard";
@@ -57,11 +57,27 @@ function Route() {
   );
 }
 
+/** The keyboard, on one screen (C5): what ? answers. Kept in sync with the handlers above. */
+const SHORTCUTS: Array<[string, string]> = [
+  ["⌘K", "help.palette"],
+  ["/", "help.search"],
+  ["j / k", "help.move"],
+  ["e", "help.readNext"],
+  ["c", "help.compose"],
+  ["r", "help.reply"],
+  ["f", "help.forward"],
+  ["x", "help.select"],
+  ["s", "help.star"],
+  ["u", "help.unread"],
+  ["?", "help.help"],
+];
+
 export function App() {
   const { path, query } = useRoute();
   useLang();
   useTheme();
   const [palette, setPalette] = useState(false);
+  const [help, setHelp] = useState(false);
   // The mailboxes are one screen's sub-navigation, not a global section, so they appear in
   // the rail only while that screen is on screen.
   const onInbox = path === "/inbox";
@@ -97,6 +113,13 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((open) => !open);
+        return;
+      }
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
+        e.preventDefault();
+        setHelp(true);
         return;
       }
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -146,6 +169,30 @@ export function App() {
           </Suspense>
         </ErrorBoundary>
       </main>
+      {help ? (
+
+        <Modal title={t("help.title")} onClose={() => setHelp(false)}>
+
+          <ul className="help-list">
+
+            {SHORTCUTS.map(([keys, label]) => (
+
+              <li key={keys}>
+
+                <kbd>{keys}</kbd>
+
+                <span>{t(label)}</span>
+
+              </li>
+
+            ))}
+
+          </ul>
+
+        </Modal>
+
+      ) : null}
+
       {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
       <NewMailToast />
     </div>

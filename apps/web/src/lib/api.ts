@@ -243,6 +243,13 @@ export const api = {
   recipients: (q: string) => request<{ items: RecipientSuggestion[] }>(`/recipients${qs({ q })}`),
   compose: (input: ComposeInput, key: string) =>
     request<SendOutcome>("/outbox", sendingMutation(input, key)),
+  /** Mark everything the current list would show as unread, read (C5). */
+  markAllRead: (query: { filter?: string; domainId?: string; q?: string }) =>
+    request<{ changed: number }>(
+      `/messages/read-all?${new URLSearchParams(Object.entries(query).filter(([, v]) => v) as [string, string][])}`,
+      mutation(),
+    ),
+
   /** Which mail may interrupt (D1). Muting never touches storage or search. */
   listNotificationPrefs: () =>
     request<{ items: NotificationPref[] }>("/notifications/prefs"),
