@@ -81,6 +81,9 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [takeover, setTakeover] = useState(false);
+  // W6: the one-button run and the alias local part it seeds.
+  const [primaryLocal, setPrimaryLocal] = useState("hello");
+  const [runResult, setRunResult] = useState<Array<{ id: string; status: string; detail: string }> | null>(null);
   // W4: one probe at a time — send, then poll; the worker cleans the alias up on arrival.
   const [probe, setProbe] = useState<{ arrived: boolean; aliasId: string; messageId?: string } | null>(null);
   const [pollCount, setPollCount] = useState(0);
@@ -157,6 +160,61 @@ export function SetupWizard({
 
       {data ? (
         <>
+          {/* The one button (W6): the whole clean-path chain, server-side. */}
+          <div className="card setup-step quiet" style={{ marginTop: 10 }}>
+            <div className="row spread wrap">
+              <div>
+                <b>{t("wiz.runTitle")}</b>
+                <div className="faint" style={{ marginTop: 4 }}>{t("wiz.runDetail")}</div>
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  aria-label={t("wiz.runLocal")}
+                  placeholder="hello"
+                  defaultValue={primaryLocal}
+                  onChange={(e) => setPrimaryLocal(e.target.value.trim().toLowerCase())}
+                  style={{ width: 110 }}
+                />
+                <button
+                  className="primary small"
+                  disabled={busy || !data.token.readsZone}
+                  title={data.token.readsZone ? undefined : t("wiz.tokenBad")}
+                  onClick={() => {
+                    setBusy(true);
+                    setError(null);
+                    setNotice(null);
+                    setRunResult(null);
+                    void api
+                      .domainSetupRun(zoneId, primaryLocal || undefined)
+                      .then((r) => {
+                        setRunResult(r.steps);
+                        setNotice(r.ok ? t("wiz.runOk") : t("wiz.runBlocked"));
+                        onChanged();
+                        load();
+                      })
+                      .catch((e) => setError(e instanceof ApiClientError ? e.message : String(e)))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  {t("wiz.runButton")}
+                </button>
+              </div>
+            </div>
+            {runResult ? (
+              <ol className="help-list" style={{ marginTop: 10 }}>
+                {runResult.map((st) => (
+                  <li key={st.id}>
+                    <kbd>{t(`wiz.step.${st.id === "sending-via" ? "sendingVia" : st.id}`)}</kbd>
+                    <span>
+                      {st.status === "ok" ? "✓ " : st.status === "skipped" ? "· " : st.status === "blocked" ? "⚠ " : "✕ "}
+                      {st.detail}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </div>
+
           <StepCard
             tone={data.token.readsZone ? "quiet" : "error"}
             title={t("wiz.tokenTitle")}

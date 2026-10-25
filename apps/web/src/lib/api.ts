@@ -179,6 +179,17 @@ export const api = {
       "/domains/sync",
       mutation(),
     ),
+  /** The one button (W6): token doctor → receiving → first alias → sending → verify. */
+  domainSetupRun: (zoneId: string, primaryLocal?: string) =>
+    request<{ steps: Array<{ id: string; status: string; detail: string }>; ok: boolean }>(
+      `/domains/${encodeURIComponent(zoneId)}/setup-run`,
+      mutation({ primaryLocal }),
+    ),
+  domainTokenReport: (zoneId: string) =>
+    request<{ checks: Array<{ capability: string; ok: boolean; permission: string }> }>(
+      `/domains/${encodeURIComponent(zoneId)}/token-report`,
+    ),
+
   /** Merge a zone's duplicate SPF records (W3): confirm + passkey, one new record. */
   mergeSpf: (zoneId: string) =>
     request<{ merged: boolean; content?: string; reason?: string }>(
