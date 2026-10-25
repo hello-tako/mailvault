@@ -366,6 +366,9 @@ function AutoProvisionCard() {
 export function Settings() {
 
   const [state, setState] = useState<PushState | null>(null);
+  // Every browser holding a subscription, readable by name — the endpoint never leaves
+  // the server (D4).
+  const { data: devices, reload: reloadDevices } = useAsync(() => api.pushDevices(), []);
   const [server, setServer] = useState<{ enabled: boolean; subscriptions: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>(null);
@@ -433,10 +436,42 @@ export function Settings() {
             </tr>
             <tr>
               <td className="muted">{t("set.devices")}</td>
-              <td>{server ? String(server.subscriptions) : t("common.dash")}</td>
+              <td>{devices ? String(devices.items.length) : server ? String(server.subscriptions) : t("common.dash")}</td>
             </tr>
           </tbody>
         </table>
+
+        {devices && devices.items.length > 0 ? (
+          <ul className="device-list">
+            {devices.items.map((d) => (
+              <li key={d.id}>
+                <input
+                  aria-label={t("set.deviceName")}
+                  defaultValue={d.label ?? ""}
+                  placeholder={d.userAgent ? d.userAgent.slice(0, 60) : t("set.unknownDevice")}
+                  onBlur={(e) => {
+                    const label = e.target.value.trim();
+                    if (label === (d.label ?? "")) return;
+                    void api.labelPushDevice(d.id, label).then(reloadDevices);
+                  }}
+                />
+                <span className="faint">
+                  {d.fails > 0 ? t("set.deviceFailing", { n: d.fails }) : t("set.deviceOk")}
+                </span>
+                <button
+                  className="ghost small"
+                  onClick={() => {
+                    void api.revokePushDevice(d.id).then(() => {
+                      reloadDevices();
+                    });
+                  }}
+                >
+                  {t("set.deviceRevoke")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
 
         {status && (
           <div className={`banner ${status.tone === "ok" ? "ok" : "error"}`}>{status.text}</div>

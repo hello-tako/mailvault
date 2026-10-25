@@ -97,6 +97,30 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // The Worker requires this custom header on state-changing calls as a CSRF signal, and
 // looks for the step-up grant on the ones that cannot be undone.
+/** A draft as the vault keeps it (B4). */
+export interface Draft {
+  id: string;
+  fromAddress: string | null;
+  to: string | null;
+  cc: string | null;
+  bcc: string | null;
+  subject: string | null;
+  text: string | null;
+  replyToMessageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One browser holding a push subscription (D4). */
+export interface PushDevice {
+  id: string;
+  label: string | null;
+  userAgent: string | null;
+  fails: number;
+  lastOkAt: string | null;
+  createdAt: string;
+}
+
 /** Which mail may interrupt (D1). Mirrors the worker's notification_prefs row. */
 export interface NotificationPref {
   id: string;
@@ -249,6 +273,21 @@ export const api = {
       `/messages/read-all?${new URLSearchParams(Object.entries(query).filter(([, v]) => v) as [string, string][])}`,
       mutation(),
     ),
+
+  /** The compose-in-progress, kept in the vault (B4) so it follows the owner's devices. */
+  getDraft: (id: string) =>
+    request<{ draft: Draft | null }>(`/drafts/${encodeURIComponent(id)}`),
+  saveDraft: (id: string, input: Omit<Draft, "id" | "createdAt" | "updatedAt">) =>
+    request<Draft>(`/drafts/${encodeURIComponent(id)}`, mutation(input, "PUT")),
+  deleteDraft: (id: string) =>
+    request<{ deleted: boolean }>(`/drafts/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
+
+  /** Devices holding a push subscription (D4). The endpoint is never part of these. */
+  pushDevices: () => request<{ items: PushDevice[] }>("/push/devices"),
+  labelPushDevice: (id: string, label: string) =>
+    request<{ id: string; label: string }>(`/push/devices/${encodeURIComponent(id)}`, mutation({ label }, "PATCH")),
+  revokePushDevice: (id: string) =>
+    request<{ removed: boolean }>(`/push/devices/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
 
   /** Which mail may interrupt (D1). Muting never touches storage or search. */
   listNotificationPrefs: () =>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { t } from "../lib/i18n";
+import { useTheme } from "../lib/theme";
 
 /**
  * Renders sanitized email HTML inside a `sandbox=""` iframe loaded from a Blob URL.
@@ -13,6 +14,16 @@ import { t } from "../lib/i18n";
  */
 export function MessageHtml({ html }: { html: string }) {
   const [url, setUrl] = useState<string | null>(null);
+  // Mail is written on white; the graphite theme would glare around it. The frame follows
+  // the app theme by inverting the page and re-inverting the pictures, so photographs stay
+  // photographs and only the paper turns (C3). Nothing is fetched and no script runs for
+  // this — it is one style rule inside the same sandboxed document as before.
+  const { choice } = useTheme();
+  const dark =
+    choice === "graphite" ||
+    (choice === "system" &&
+      typeof window !== "undefined" &&
+      !window.matchMedia("(prefers-color-scheme: light)").matches);
 
   const doc = useMemo(() => {
     const csp = [
@@ -41,8 +52,12 @@ td,th{overflow-wrap:anywhere;word-break:normal}
 pre{white-space:pre-wrap;overflow-wrap:anywhere}
 a{color:#0a58ca;overflow-wrap:break-word}
 </style>
+${dark ? `<style>
+html{filter:invert(1) hue-rotate(180deg);background:#fff}
+img,video,picture,svg{filter:invert(1) hue-rotate(180deg)}
+</style>` : ""}
 </head><body>${html}</body></html>`;
-  }, [html]);
+  }, [html, dark]);
 
   useEffect(() => {
     const blob = new Blob([doc], { type: "text/html;charset=utf-8" });

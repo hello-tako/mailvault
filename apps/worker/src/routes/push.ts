@@ -1,10 +1,16 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../app-env";
-import { countSubscriptions, deleteSubscription, isUsableEndpoint, pushToAll, saveSubscription, vapidPublicKey } from "../push";
+import { countSubscriptions, deleteSubscription, isUsableEndpoint, pushToAll, saveSubscription, vapidPublicKey,
+  listDevices,
+  setDeviceLabel,
+  deleteDevice,} from "../push";
 import { vapidConfig } from "../env";
 import { log } from "../lib/logging";
-import { readJson } from "./_helpers";
+import { asApiError, readJson } from "./_helpers";
+
+const DeviceIdParam = z.object({ id: z.string().min(1) });
+const DeviceLabelSchema = z.object({ label: z.string().trim().max(80) });
 
 const SubscribeSchema = z.object({
   endpoint: z.string().min(1).max(2048).refine(isUsableEndpoint, { message: "Push endpoint must be a valid HTTPS URL" }),
@@ -47,6 +53,29 @@ export const pushRoute = new Hono<AppEnv>()
     const { endpoint } = await readJson(c, UnsubscribeSchema);
     const removed = await deleteSubscription(c.env.DB, endpoint);
     log.info("push_unsubscribed", { removed });
+    return c.json({ removed });
+  })
+
+  /** Devices that hold a subscription (D4): list, label, and revoke by id — the endpoint
+   * itself is a credential and is never part of any response. */
+  .get("/api/push/devices", async (c) => {
+    try {
+      return c.json({ items: await listDevices(c.env.DB) });
+    } catch (err) {
+      throw asApiError(err);
+    }
+  })
+  .patch("/api/push/devices/:id", async (c) => {
+    const { id } = DeviceIdParam.parse({ id: c.req.param("id") });
+    const { label } = await readJson(c, DeviceLabelSchema);
+    if (!(await setDeviceLabel(c.env.DB, id, label.slice(0, 80))))
+      return c.json({ error: { code: "NOT_FOUND", message: "No such device." } }, 404);
+    return c.json({ id, label: label.slice(0, 80) });
+  })
+  .delete("/api/push/devices/:id", async (c) => {
+    const { id } = DeviceIdParam.parse({ id: c.req.param("id") });
+    const removed = await deleteDevice(c.env.DB, id);
+    log.info("push_device_revoked", { id, removed });
     return c.json({ removed });
   })
 

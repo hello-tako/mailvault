@@ -268,6 +268,12 @@ export function Composer({
 }) {
   const isReply = !!replyTo;
   const isForward = !!forwardOf;
+  // The slot this composer autosaves into (B4): one for a new message, one per message
+  // being answered. Server-side, so the words follow the owner between devices.
+  const draftSlot = useMemo(
+    () => (replyTo ? `reply-${replyTo.id}` : forwardOf ? null : "compose"),
+    [replyTo, forwardOf],
+  );
   // A new compose picks up where the last one left off, on this device only. A reply has
   // its context in the message it answers, so it never touches the draft slot.
   const [restoredDraft] = useState(() => (replyTo ? null : readDraft()));
@@ -291,16 +297,56 @@ export function Composer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Debounced autosave: closing the tab mid-thought must not cost the message. A blank
-  // compose clears the slot instead of storing an empty promise.
+  // A draft saved on another device fills this composer on open — before typing starts,
+  // so it can never overwrite a word the owner has already changed here.
+  const hydratedRef = useRef(false);
   useEffect(() => {
-    if (isReply) return;
+    if (hydratedRef.current || !draftSlot) return;
+    hydratedRef.current = true;
+    void api.getDraft(draftSlot).then(({ draft }) => {
+      if (!draft) return;
+      setFrom(draft.fromAddress ?? from);
+      setTo(draft.to ?? to);
+      setCc(draft.cc ?? "");
+      setBcc(draft.bcc ?? "");
+      setSubject(draft.subject ?? subject);
+      if (!isReply) setText(draft.text ?? text);
+      else if ((draft.text ?? "").trim()) setText(draft.text ?? text);
+    }).catch(() => undefined);
+    // Runs once: a hydrate that raced typing would overwrite the owner's words.
+  }, []);
+
+  // Debounced autosave, twice over (B4): this browser's storage for an instant restore, the
+  // vault's row for every other device. A blank slot saves as a delete, not as an empty
+  // promise.
+  useEffect(() => {
     const timer = setTimeout(() => {
-      if (draftIsBlank({ from, to, cc, subject, text })) clearDraft();
-      else saveDraft({ from, to, cc, subject, text });
-    }, 400);
+      if (!draftSlot) return;
+      const blank = !from && !to && !cc && !bcc && !subject.trim() && !text.trim();
+      if (blank) {
+        void api.deleteDraft(draftSlot).catch(() => undefined);
+        if (!isReply) clearDraft();
+        return;
+      }
+      void api
+        .saveDraft(draftSlot, {
+          fromAddress: from || null,
+          to: to || null,
+          cc: cc || null,
+          bcc: bcc || null,
+          subject: subject || null,
+          text: text || null,
+          replyToMessageId: isReply ? replyTo!.id : null,
+        })
+        .catch(() => undefined);
+      if (!isReply && !draftIsBlank({ from, to, cc, subject, text })) {
+        saveDraft({ from, to, cc, subject, text });
+      } else if (!isReply) {
+        clearDraft();
+      }
+    }, 700);
     return () => clearTimeout(timer);
-  }, [isReply, from, to, cc, subject, text]);
+  }, [draftSlot, isReply, from, to, cc, bcc, subject, text]);
   const body = useRef<HTMLTextAreaElement>(null);
   const sendKey = useRef(crypto.randomUUID());
 
@@ -424,6 +470,7 @@ export function Composer({
           },
           sendKey.current,
         );
+        if (draftSlot) void api.deleteDraft(draftSlot).catch(() => undefined);
         onSent(outcome);
         setBusy(false);
         return;
@@ -454,6 +501,7 @@ export function Composer({
             sendKey.current,
           );
       if (!isReply) clearDraft();
+      if (draftSlot) void api.deleteDraft(draftSlot).catch(() => undefined);
       onSent(outcome);
     } catch (err) {
       const code = (err as ApiClientError).code ?? "";
