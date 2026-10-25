@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
  * ReadableStream), so application code executes against the same APIs as in workerd.
  */
 export default defineConfig({
+  resolve: { alias: { "cloudflare:workers": new URL("./test/compat/worker-entrypoint-node.ts", import.meta.url).pathname } },
   test: {
     globals: true,
     environment: "node",

@@ -72,7 +72,10 @@ export interface Env {
    */
   DELIVERY_EVENTS_QUEUE?: string;
 
+  MAILVAULT_CUSTOMER_OTP_ENABLED?: string;
+
   // Secrets
+  OTP_BRIDGE_RPC_HMAC_KEY?: string;
   CLOUDFLARE_API_TOKEN?: string;
   /** JSON private JWK (P-256) used to sign VAPID assertions. */
   VAPID_PRIVATE_KEY?: string;

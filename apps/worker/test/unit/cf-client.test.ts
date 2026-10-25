@@ -71,3 +71,67 @@ describe("Cloudflare client request shapes", () => {
     expect(sent[1]!.url).toContain("type=MX");
   });
 });
+
+const routingRule = (id: string) => ({ id, enabled: true,
+  actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "literal", field: "to", value: "fixture@example.test" }] });
+const pageInfo = (count: number, total = count, page = 1) => ({ page, per_page: 50, count, total_count: total, total_pages: Math.max(1, Math.ceil(total / 50)) });
+
+describe("bounded complete Email Routing rule verification", () => {
+  it("reads complete pages using the documented 50-row GET limit", async () => {
+    const sent: string[] = [];
+    const client = createCloudflareClient({ token: TOKEN, fetch: (async (input, init) => {
+      sent.push(String(input));
+      expect(init?.method).toBe("GET");
+      expect(init?.body).toBeUndefined();
+      const page = Number(new URL(String(input)).searchParams.get("page"));
+      const rows = page === 1 ? Array.from({ length: 50 }, (_, index) => routingRule(`rule-${index}`)) : [routingRule("rule-50")];
+      return Response.json({ success: true, result: rows, result_info: pageInfo(rows.length, 51, page) });
+    }) as typeof fetch });
+    expect(await client.listEmailRoutingRules(ZONE)).toHaveLength(51);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain("per_page=50&page=1");
+    expect(sent[1]).toContain("per_page=50&page=2");
+    expect(sent.some((url) => url.includes(TOKEN))).toBe(false);
+  });
+
+  it.each([
+    { result: [], result_info: undefined },
+    { result: {}, result_info: pageInfo(0) },
+    { result: [routingRule("r")], result_info: pageInfo(0) },
+    { result: [], result_info: { ...pageInfo(0), page: 2 } },
+    { result: [], result_info: { ...pageInfo(0), per_page: 100 } },
+    { result: [], result_info: { ...pageInfo(0), total_pages: 21, total_count: 1050 } },
+    { result: [], result_info: { ...pageInfo(0), total_count: 1 } },
+    { result: [], result_info: { ...pageInfo(0), total_count: 51, total_pages: 2 } },
+    { result: [{}], result_info: pageInfo(1) },
+    { result: [routingRule("r"), routingRule("r")], result_info: pageInfo(2) },
+  ])("fails closed for incomplete, excessive or malformed pagination %#", async (envelope) => {
+    let calls = 0;
+    const client = createCloudflareClient({ token: TOKEN, fetch: (async () => {
+      calls++;
+      return Response.json({ success: true, ...envelope });
+    }) as typeof fetch });
+    await expect(client.listEmailRoutingRules(ZONE)).rejects.toThrow(/Email Routing/);
+    expect(calls).toBe(1);
+  });
+
+  it.each(["duplicate", "changed-count", "changed-pages"])("rejects %s across pages", async (failure) => {
+    let calls = 0;
+    const client = createCloudflareClient({ token: TOKEN, fetch: (async () => {
+      calls++;
+      const rows = calls === 1 ? Array.from({ length: 50 }, (_, index) => routingRule(`rule-${index}`)) : [routingRule(failure === "duplicate" ? "rule-0" : "rule-50")];
+      const info = pageInfo(rows.length, 51, calls);
+      if (calls === 2 && failure === "changed-count") info.total_count = 52;
+      if (calls === 2 && failure === "changed-pages") info.total_pages = 3;
+      return Response.json({ success: true, result: rows, result_info: info });
+    }) as typeof fetch });
+    await expect(client.listEmailRoutingRules(ZONE)).rejects.toThrow(/Email Routing/);
+    expect(calls).toBe(2);
+  });
+
+  it("accepts a complete empty inventory with zero total pages", async () => {
+    const client = createCloudflareClient({ token: TOKEN, fetch: (async () => Response.json({ success: true,
+      result: [], result_info: { ...pageInfo(0), total_pages: 0 } })) as typeof fetch });
+    expect(await client.listEmailRoutingRules(ZONE)).toEqual([]);
+  });
+});

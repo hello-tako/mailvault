@@ -41,6 +41,21 @@ async function apply(db: D1Database, names: string[]) {
 }
 
 describe("append-only migration compatibility", () => {
+  it("upgrades a previously READY domain without promoting discovery timestamps to routing proof", async () => {
+    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('ok') } }", d1Databases: ["DB"] });
+    try {
+      const db = (await mf.getD1Database("DB")) as unknown as D1Database;
+      await apply(db, files.filter((file) => file < "0021"));
+      await db.prepare(`INSERT INTO domains(id,cloudflare_zone_id,name,zone_status,zone_type,mail_status,routing_status,catch_all_status,last_checked_at)
+        VALUES('d','zone','migration.example','active','full','READY','READY','OURS','2026-10-13T00:00:00.000Z')`).run();
+      await apply(db, files.filter((file) => file >= "0021"));
+      expect(await db.prepare("SELECT routing_verified_at FROM domains WHERE id='d'").first("routing_verified_at")).toBe(null);
+      expect(await db.prepare("SELECT mail_status FROM domains WHERE id='d'").first("mail_status")).toBe("READY");
+      expect(await db.prepare("SELECT last_checked_at FROM domains WHERE id='d'").first("last_checked_at")).toBe("2026-10-13T00:00:00.000Z");
+      expect((await db.prepare("PRAGMA foreign_key_check").all()).results).toEqual([]);
+    } finally { await mf.dispose(); }
+  });
+
   it.each([false, true])("migrates a %s legacy fixture with valid foreign keys", async (legacy) => {
     const mf = new Miniflare({
       modules: true,

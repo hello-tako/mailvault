@@ -1,6 +1,7 @@
 import type { PreflightResult, ConflictDetails } from "@mailvault/shared";
 import { ConflictType, PreflightClassification } from "@mailvault/shared";
 import { CloudflareApiError, type CloudflareClient } from "../cf/api-client";
+import type { CfEmailRoutingRule } from "../cf/types";
 import { log } from "../lib/logging";
 import { nowIso } from "../lib/util";
 import { assessMx, type MxAssessment } from "./mx";
@@ -20,6 +21,9 @@ export interface DeliveryPath {
   foreignCatchAll: boolean;
   catchAllType: string | null;
   catchAllValue: string | null;
+  /** Ordinary enabled rules must be a single exact MailVault worker action. */
+  routingRulesSafe: boolean;
+  routingRuleConflict: { actionType: string | null } | null;
   mx: MxAssessment;
 }
 
@@ -32,6 +36,22 @@ async function settle<T>(p: Promise<T>): Promise<Settled<T>> {
   } catch (err) {
     return { ok: false, err };
   }
+}
+
+function safeRoutingRule(rule: CfEmailRoutingRule, workerName: string): boolean {
+  if (rule.enabled !== true) return rule.enabled === false;
+  if (!Array.isArray(rule.actions) || rule.actions.length !== 1) return false;
+  const action = rule.actions[0];
+  if (!action || action.type !== "worker" || !Array.isArray(action.value) || action.value.length !== 1 || action.value[0] !== workerName) return false;
+  if (!Array.isArray(rule.matchers) || rule.matchers.length < 1) return false;
+  return rule.matchers.every((matcher) => matcher &&
+    ((matcher.type === "all" && matcher.field === undefined && matcher.value === undefined) ||
+      (matcher.type === "literal" && matcher.field === "to" && typeof matcher.value === "string" && matcher.value.length > 0 && matcher.value.length <= 90)));
+}
+
+function routingRuleConflict(rule: CfEmailRoutingRule): { actionType: string | null } {
+  const action = Array.isArray(rule.actions) && rule.actions.length === 1 ? rule.actions[0] : null;
+  return { actionType: action && ["worker", "forward", "drop"].includes(String(action.type)) ? action.type! : null };
 }
 
 function isDenied(err: unknown): boolean {
@@ -48,15 +68,16 @@ export async function verifyDeliveryPath(
   zoneId: string,
   workerName: string,
 ): Promise<DeliveryPath> {
-  const [mxRecords, routingRes, catchAll] = await Promise.all([
+  const [mxRecords, routingRes, catchAll, routingRules] = await Promise.all([
     client.listDnsRecords(zoneId, "MX"),
     settle(client.getEmailRoutingStatus(zoneId)),
     client.getCatchAll(zoneId),
+    client.listEmailRoutingRules(zoneId),
   ]);
   const mx = assessMx(mxRecords);
   let routing: boolean;
   if (routingRes.ok) {
-    routing = routingRes.value.enabled === true || /ready/i.test(routingRes.value.status ?? "");
+    routing = routingRes.value.enabled === true || (routingRes.value.enabled !== false && /ready/i.test(routingRes.value.status ?? ""));
   } else if (isDenied(routingRes.err)) {
     // Re-measured after widening the token's Zone Resources: `POST .../enable` then
     // works, but this settings read still 403s — no API-token permission covers it.
@@ -67,15 +88,21 @@ export async function verifyDeliveryPath(
   } else {
     throw routingRes.err;
   }
-  const ca = catchAll?.actions?.[0];
-  const catchAllOurs = !!ca && ca.type === "worker" && ca.value?.[0] === workerName;
-  const foreignCatchAll = !!catchAll && catchAll.enabled !== false && !!ca && !catchAllOurs && ca.type !== "drop";
+  const ca = catchAll?.actions;
+  const catchAllOurs = !!catchAll && catchAll.enabled === true && Array.isArray(ca) && ca.length === 1 &&
+    ca[0]?.type === "worker" && Array.isArray(ca[0].value) && ca[0].value.length === 1 && ca[0].value[0] === workerName &&
+    Array.isArray(catchAll.matchers) && catchAll.matchers.length === 1 && catchAll.matchers[0]?.type === "all" &&
+    catchAll.matchers[0].field === undefined && catchAll.matchers[0].value === undefined;
+  const foreignCatchAll = !!catchAll && catchAll.enabled !== false && !catchAllOurs;
+  const unsafeRule = routingRules.find((rule) => !safeRoutingRule(rule, workerName));
   return {
     routing,
     catchAllOurs,
     foreignCatchAll,
-    catchAllType: ca?.type ?? null,
-    catchAllValue: ca?.value?.[0] ?? null,
+    catchAllType: ca?.[0]?.type ?? null,
+    catchAllValue: ca?.[0]?.value?.[0] ?? null,
+    routingRulesSafe: !unsafeRule,
+    routingRuleConflict: unsafeRule ? routingRuleConflict(unsafeRule) : null,
     mx,
   };
 }
@@ -145,6 +172,15 @@ export async function preflightZone(
       mxRecords: assessed.foreign.map((f) => ({ exchange: f.exchange, priority: f.priority })),
     };
     return { ...base, classification: PreflightClassification.MxConflict, safeToProvision: false, conflict };
+  }
+
+  if (!path.routingRulesSafe) {
+    const conflict: ConflictDetails = {
+      type: ConflictType.CatchAll,
+      message: "An enabled Email Routing rule may shadow MailVault's catch-all.",
+      catchAll: { actionType: path.routingRuleConflict?.actionType ?? undefined },
+    };
+    return { ...base, classification: PreflightClassification.CatchAllConflict, safeToProvision: false, conflict };
   }
 
   if (path.foreignCatchAll) {

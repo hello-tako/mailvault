@@ -61,7 +61,7 @@ function stubDb(found = true) {
 
 function stubClient(
   overrides: Partial<
-    Record<"listDnsRecords" | "getEmailRoutingStatus" | "enableEmailRouting" | "getCatchAll", () => Promise<unknown>>
+    Record<"listDnsRecords" | "getEmailRoutingStatus" | "enableEmailRouting" | "getCatchAll" | "listEmailRoutingRules", () => Promise<unknown>>
   > = {},
 ) {
   const mutations: string[] = [];
@@ -78,6 +78,7 @@ function stubClient(
     getEmailRoutingStatus: async () =>
       overrides.getEmailRoutingStatus ? ((await overrides.getEmailRoutingStatus()) as never) : {},
     getEmailRoutingDns: async () => [],
+    listEmailRoutingRules: async () => overrides.listEmailRoutingRules ? (await overrides.listEmailRoutingRules()) : [],
     enableEmailRouting: async () => {
       if (overrides.enableEmailRouting) {
         await overrides.enableEmailRouting();
@@ -188,6 +189,21 @@ describe("provisionDomain allow-list gate (section 7/9)", () => {
     // domain must NOT be marked READY off a single successful write.
     expect(out.status).toBe(MailStatus.Failed);
     expect(out.ok).toBe(false);
+  });
+
+  it("refuses an ordinary routing-rule shadow even with both takeover flags", async () => {
+    const { client, mutations } = stubClient({
+      listDnsRecords: async () => [{ content: "route1.mx.cloudflare.net", priority: 30 }],
+      getEmailRoutingStatus: async () => ({ enabled: true }),
+      getCatchAll: async () => ({ enabled: true, actions: [{ type: "worker", value: ["mail-vault"] }], matchers: [{ type: "all" }] }),
+      listEmailRoutingRules: async () => [{ id: "shadow", enabled: true, actions: [{ type: "drop" }], matchers: [{ type: "literal", field: "to", value: "fixture@example.com" }] }],
+    });
+    const { db, writes } = stubDb();
+    const out = await provisionDomain(db, client, "z1", "mail-vault", { allowMxTakeover: true, allowCatchAllTakeover: true, authorizeTakeover: async () => {} });
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("shadow");
+    expect(mutations).toEqual([]);
+    expect(writes.some(write => write.sql.includes("routing_verified_at = NULL"))).toBe(true);
   });
 
   it("refuses a zone MailVault never imported, which is what bounds an account-wide token", async () => {

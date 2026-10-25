@@ -36,6 +36,17 @@ export interface CfEmailRoutingDnsRecord {
   ttl?: number;
 }
 
+/** Ordinary Email Routing rule shape returned by the paginated rules endpoint. */
+export interface CfEmailRoutingRule {
+  id?: string;
+  actions?: Array<{ type?: "drop" | "forward" | "worker"; value?: string[] }>;
+  enabled?: boolean;
+  matchers?: Array<{ type?: "all" | "literal"; field?: "to"; value?: string }>;
+  name?: string;
+  priority?: number;
+  source?: "api" | "wrangler";
+}
+
 /** Catch-all rule shape (PUT/GET /zones/{id}/email/routing/rules/catch_all). */
 export interface CfCatchAllAction {
   type: "drop" | "forward" | "worker";

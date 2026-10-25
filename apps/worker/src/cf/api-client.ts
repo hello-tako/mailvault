@@ -2,6 +2,7 @@ import type {
   CfCatchAllRule,
   CfDnsRecord,
   CfEmailRoutingDnsRecord,
+  CfEmailRoutingRule,
   CfEmailRoutingSettings,
   CfEnvelope,
   CfSendingDomain,
@@ -57,6 +58,7 @@ export interface CloudflareClient {
   deleteDnsRecord(zoneId: string, recordId: string): Promise<void>;
   getEmailRoutingStatus(zoneId: string): Promise<CfEmailRoutingSettings>;
   getEmailRoutingDns(zoneId: string): Promise<CfEmailRoutingDnsRecord[]>;
+  listEmailRoutingRules(zoneId: string): Promise<CfEmailRoutingRule[]>;
   enableEmailRouting(zoneId: string): Promise<void>;
   getCatchAll(zoneId: string): Promise<CfCatchAllRule | null>;
   setCatchAllWorker(zoneId: string, workerName: string): Promise<void>;
@@ -196,6 +198,52 @@ export function createCloudflareClient(options: CloudflareClientOptions): Cloudf
 
     getEmailRoutingStatus: (zoneId) => requestResult<CfEmailRoutingSettings>("GET", `/zones/${zoneId}/email/routing`),
     getEmailRoutingDns: (zoneId) => requestResult<CfEmailRoutingDnsRecord[]>("GET", `/zones/${zoneId}/email/routing/dns`),
+
+    /**
+     * Read every ordinary Email Routing rule before treating catch-all routing as ready.
+     * Cloudflare caps this endpoint at 50 rows/page; a bounded complete pagination proof
+     * avoids certifying a catch-all while an earlier rule is hidden on a later page.
+     */
+    async listEmailRoutingRules(zoneId): Promise<CfEmailRoutingRule[]> {
+      const out: CfEmailRoutingRule[] = [];
+      const seen = new Set<string>();
+      const maxPages = 20;
+      const perPage = 50;
+      let totalPages = 0;
+      let totalCount = 0;
+      for (let page = 1; page <= maxPages; page++) {
+        const envelope = await requestEnvelope<CfEmailRoutingRule[]>("GET", `/zones/${zoneId}/email/routing/rules`, {
+          query: { per_page: perPage, page }, retries: 0,
+        });
+        const info = envelope.result_info;
+        const rows = envelope.result;
+        const pageCount = info ? Math.max(1, info.total_pages) : 0;
+        if (!Array.isArray(rows) || !info || info.page !== page || info.per_page !== perPage ||
+          !Number.isInteger(info.count) || !Number.isInteger(info.total_count) || !Number.isInteger(info.total_pages) ||
+          info.count !== rows.length || info.count < 0 || info.count > perPage || info.total_count < 0 || info.total_pages < 0 || (info.total_pages === 0 && info.total_count !== 0) || pageCount > maxPages ||
+          pageCount !== Math.max(1, Math.ceil(info.total_count / perPage)) ||
+          info.total_count < info.count || (page < pageCount && info.count !== perPage) ||
+          (page === pageCount && out.length + rows.length !== info.total_count)) {
+          throw new CloudflareApiError("upstream", "Cloudflare returned incomplete Email Routing rule pagination", 200, [], `/zones/${zoneId}/email/routing/rules`);
+        }
+        if (page === 1) { totalPages = pageCount; totalCount = info.total_count; }
+        else if (pageCount !== totalPages || info.total_count !== totalCount) {
+          throw new CloudflareApiError("upstream", "Cloudflare Email Routing rule pagination changed during verification", 200, [], `/zones/${zoneId}/email/routing/rules`);
+        }
+        for (const row of rows) {
+          if (!row || typeof row !== "object" || typeof row.id !== "string" || row.id.length === 0 || seen.has(row.id)) {
+            throw new CloudflareApiError("upstream", "Cloudflare returned malformed Email Routing rules", 200, [], `/zones/${zoneId}/email/routing/rules`);
+          }
+          seen.add(row.id);
+          out.push(row);
+        }
+        if (page === totalPages) {
+          if (out.length !== totalCount) throw new CloudflareApiError("upstream", "Cloudflare Email Routing rule count mismatch", 200, [], `/zones/${zoneId}/email/routing/rules`);
+          return out;
+        }
+      }
+      throw new CloudflareApiError("upstream", "Cloudflare Email Routing rules exceed verification bound", 200, [], `/zones/${zoneId}/email/routing/rules`);
+    },
 
     // Adds+locks the Cloudflare MX/SPF records and enables routing.
     // /email/routing/dns (GET/POST) is dashboard-scoped and answers 403 for API

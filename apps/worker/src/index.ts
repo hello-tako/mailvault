@@ -28,6 +28,7 @@ import { drainDeletionJobs } from "./db/deletions";
 
 // Durable Object classes must be exported from the entry module.
 export { MailboxHub };
+export { CustomerOtpReader } from "./customer-otp/entrypoint";
 
 // One router instance per isolate is safe: Hono is stateless and env is per-request.
 const app = createApp();

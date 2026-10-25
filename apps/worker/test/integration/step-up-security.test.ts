@@ -425,7 +425,8 @@ describe("step-up security regressions", () => {
           else if (url.pathname.endsWith("/email/routing"))
             result = { enabled: true, status: "ready" };
           else if (url.pathname.endsWith("/email/routing/rules/catch_all")) result = catchAll;
-          return Response.json({ success: true, result, result_info: { total_pages: 1 } });
+          else if (url.pathname.endsWith("/email/routing/rules")) result = [];
+          return Response.json({ success: true, result, result_info: { page: 1, per_page: 50, count: Array.isArray(result) ? result.length : 1, total_count: Array.isArray(result) ? result.length : 1, total_pages: 1 } });
         }),
       );
 
@@ -468,8 +469,8 @@ describe("step-up security regressions", () => {
             ]
           : url.pathname.endsWith("/email/routing")
             ? { enabled: true, status: "ready" }
-            : null;
-        return Response.json({ success: true, result, result_info: { total_pages: 1 } });
+            : url.pathname.endsWith("/email/routing/rules") ? [] : null;
+        return Response.json({ success: true, result, result_info: { page: 1, per_page: 50, count: Array.isArray(result) ? result.length : 1, total_count: Array.isArray(result) ? result.length : 1, total_pages: 1 } });
       }),
     );
 
@@ -522,8 +523,8 @@ describe("step-up security regressions", () => {
               ]
           : url.pathname.endsWith("/email/routing")
             ? { enabled: true, status: "ready" }
-            : null;
-        return Response.json({ success: true, result, result_info: { total_pages: 1 } });
+            : url.pathname.endsWith("/email/routing/rules") ? [] : null;
+        return Response.json({ success: true, result, result_info: { page: 1, per_page: 50, count: Array.isArray(result) ? result.length : 1, total_count: Array.isArray(result) ? result.length : 1, total_pages: 1 } });
       }),
     );
 
