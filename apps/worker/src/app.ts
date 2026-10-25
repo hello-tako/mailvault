@@ -18,6 +18,7 @@ import { rulesRoute } from "./routes/rules";
 import { semanticRoute } from "./routes/semantic";
 import { notificationsRoute } from "./routes/notifications";
 import { draftsRoute } from "./routes/drafts";
+import { contactsRoute } from "./routes/contacts";
 import { portalRoute } from "./routes/portal";
 
 /**
@@ -74,6 +75,7 @@ export function createApp(): Hono<AppEnv> {
   app.route("/", rulesRoute);
   app.route("/", notificationsRoute);
   app.route("/", draftsRoute);
+  app.route("/", contactsRoute);
   app.route("/", semanticRoute);
 
   return app;

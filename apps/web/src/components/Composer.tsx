@@ -255,6 +255,7 @@ export function Composer({
   bindingMissing = false,
   onClose,
   onSent,
+  onScheduled,
 }: {
   replyTo?: MessageDetail | null;
   /** Forwarding one stored message: compose fields plus the original, quoted or attached. */
@@ -265,11 +266,18 @@ export function Composer({
   bindingMissing?: boolean;
   onClose: () => void;
   onSent: (outcome: SendOutcome) => void;
+  /** A scheduled send left the composer waiting, not gone (B6). */
+  onScheduled?: (scheduled: { id: string; sendAt: string }) => void;
 }) {
   const isReply = !!replyTo;
   const isForward = !!forwardOf;
   // The slot this composer autosaves into (B4): one for a new message, one per message
   // being answered. Server-side, so the words follow the owner between devices.
+  const sourceAttachments = useMemo(
+    () => (replyTo?.attachments ?? forwardOf?.attachments ?? []),
+    [replyTo, forwardOf],
+  );
+
   const draftSlot = useMemo(
     () => (replyTo ? `reply-${replyTo.id}` : forwardOf ? null : "compose"),
     [replyTo, forwardOf],
@@ -292,6 +300,10 @@ export function Composer({
   );
   const [fromName, setFromName] = useState("");
   const [attachOriginal, setAttachOriginal] = useState(true);
+  // B6: send now, or let it wait (a wait is also the undo window). B2: files already in
+  // the vault, from the message being answered or forwarded, ride along as references.
+  const [delaySec, setDelaySec] = useState(0);
+  const [refIds, setRefIds] = useState<Set<string>>(new Set());
   const [text, setText] = useState(() => (replyTo ? quoteOf(replyTo) : restoredDraft?.text ?? ""));
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -456,6 +468,44 @@ export function Composer({
     try {
       const ccList = splitAddresses(cc);
       const bccList = splitAddresses(bcc);
+      const attachmentRefs = (
+        (replyTo?.attachments ?? forwardOf?.attachments ?? [])
+          .filter((a) => refIds.has(a.id))
+          .map((a) => ({ messageId: (replyTo ?? forwardOf)!.id, attachmentId: a.id }))
+      ) as Array<{ messageId: string; attachmentId: string }>;
+      if (delaySec > 0) {
+        const payload = isReply && replyTo
+          ? {
+              text,
+              ...(ccList.length > 0 ? { cc: ccList } : {}),
+              ...(subject.trim() ? { subject: subject.trim() } : {}),
+              ...(fromName.trim() ? { fromName: fromName.trim() } : {}),
+              ...(attachments.length > 0 ? { attachments } : {}),
+              ...(attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+              replyToMessageId: replyTo.id,
+            }
+          : {
+              fromAddress: from,
+              to: splitAddresses(to),
+              ...(ccList.length > 0 ? { cc: ccList } : {}),
+              ...(bccList.length > 0 ? { bcc: bccList } : {}),
+              subject,
+              text,
+              ...(fromName.trim() ? { fromName: fromName.trim() } : {}),
+              ...(attachments.length > 0 ? { attachments } : {}),
+              ...(attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+            };
+        const scheduled = await api.scheduleSend(
+          isReply ? "reply" : "compose",
+          payload as Record<string, unknown>,
+          delaySec,
+        );
+        if (draftSlot) void api.deleteDraft(draftSlot).catch(() => undefined);
+        if (!isReply) clearDraft();
+        onScheduled?.(scheduled);
+        setBusy(false);
+        return;
+      }
       if (isForward && forwardOf) {
         const outcome = await api.forwardMessage(
           forwardOf.id,
@@ -497,6 +547,7 @@ export function Composer({
               text,
               ...(fromName.trim() ? { fromName: fromName.trim() } : {}),
               ...(attachments.length > 0 ? { attachments } : {}),
+              ...(attachmentRefs.length > 0 ? { attachmentRefs } : {}),
             },
             sendKey.current,
           );
@@ -705,6 +756,35 @@ export function Composer({
           ) : null}
         </div>
 
+        {sourceAttachments.length > 0 ? (
+          <div className="field">
+            <label>{t("composer.fromThisMessage")}</label>
+            <ul className="file-list">
+              {sourceAttachments.map((a) => (
+                <li key={a.id}>
+                  <label className="check small">
+                    <input
+                      type="checkbox"
+                      checked={refIds.has(a.id)}
+                      onChange={(e) => {
+                        setRefIds((current) => {
+                          const next = new Set(current);
+                          if (e.target.checked) next.add(a.id);
+                          else next.delete(a.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    <span className="file-name">{a.filename}</span>
+                  </label>
+                  <span className="faint">{formatBytes(a.size)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="field-hint">{t("composer.fromThisMessageHint")}</div>
+          </div>
+        ) : null}
+
         {bindingMissing && (
           <p className="banner error" role="alert">
             {t("composer.unavailable")}
@@ -732,6 +812,17 @@ export function Composer({
             >
               {t(busy ? "composer.sending" : "composer.send")}
             </button>
+            <select
+              aria-label={t("composer.sendDelay")}
+              value={delaySec}
+              onChange={(e) => setDelaySec(Number(e.target.value))}
+            >
+              <option value={0}>{t("composer.delayNow")}</option>
+              <option value={10}>{t("composer.delay10")}</option>
+              <option value={60}>{t("composer.delay1m")}</option>
+              <option value={600}>{t("composer.delay10m")}</option>
+              <option value={3600}>{t("composer.delay1h")}</option>
+            </select>
           </div>
         </div>
       </form>

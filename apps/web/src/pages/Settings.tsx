@@ -363,6 +363,81 @@ function AutoProvisionCard() {
   );
 }
 
+/** The owner's kept addresses (B10): editable here, offered first when composing. */
+function ContactsCard() {
+  const { data, reload } = useAsync(() => api.listContacts(), []);
+  const [address, setAddress] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function add() {
+    if (!address.trim()) return;
+    setBusy(true);
+    try {
+      await api.saveContact({ address: address.trim(), name: name.trim() || null });
+      setAddress("");
+      setName("");
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card mt">
+      <h2 style={{ marginTop: 0 }}>{t("set.contactsTitle")}</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        {t("set.contactsIntro")}
+      </p>
+      {data && data.items.length > 0 ? (
+        <ul className="device-list">
+          {data.items.map((c) => (
+            <li key={c.id}>
+              <input
+                aria-label={t("set.contactName")}
+                defaultValue={c.name ?? ""}
+                placeholder={c.address}
+                onBlur={(e) => {
+                  const next = e.target.value.trim();
+                  if (next === (c.name ?? "")) return;
+                  void api.saveContact({ address: c.address, name: next || null }).then(reload);
+                }}
+              />
+              <span className="addr faint">{c.address}</span>
+              <button
+                className="ghost small"
+                onClick={() => void api.deleteContact(c.id).then(reload)}
+              >
+                {t("set.contactDelete")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="faint">{t("set.contactsEmpty")}</p>
+      )}
+      <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
+        <input
+          aria-label={t("set.addContact")}
+          placeholder="name@example.com"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          style={{ minWidth: 220 }}
+        />
+        <input
+          aria-label={t("set.contactName")}
+          placeholder={t("set.contactName")}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button disabled={busy || !address.trim()} onClick={() => void add()}>
+          {t("set.addContact")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
 
   const [state, setState] = useState<PushState | null>(null);
@@ -527,6 +602,7 @@ export function Settings() {
       </div>
 
       <PasskeysCard />
+      <ContactsCard />
       <AutoProvisionCard />
       <SemanticCard />
 

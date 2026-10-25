@@ -96,6 +96,9 @@ export async function getTestBindings(): Promise<TestBindings> {
     MAIL_BUCKET: bucket,
     ASSETS: {},
     MAIL_INGEST_QUEUE: queue,
+    SCHEDULER_Q: {
+      send: async (_body: unknown, _opts?: unknown) => undefined,
+    },
     ENVIRONMENT: "test",
     DEV_AUTH_BYPASS: "true",
     MAX_MESSAGE_BYTES: "20971520",

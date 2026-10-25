@@ -536,6 +536,8 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
         mailboxPicker={!wide}
       />
 
+      {view === "sent" ? <ScheduledStrip /> : null}
+
       {wide && openId ? (
         <div className="mail-split">
           <div className="mail-list">{list}</div>
@@ -565,6 +567,31 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
           onClose={() => setConfirmDelete(false)}
         />
       )}
+    </div>
+  );
+}
+
+
+/** Sends still waiting their turn (B6): visible, named, and cancellable until they fire. */
+function ScheduledStrip() {
+  const { data, reload } = useAsync(() => api.scheduledList(), []);
+  if (!data || data.items.length === 0) return null;
+  return (
+    <div className="banner" style={{ marginTop: 10 }}>
+      {t("inbox.scheduledStrip", { n: data.items.length })}
+      <span className="row wrap" style={{ gap: 8, marginLeft: 8 }}>
+        {data.items.map((item) => (
+          <button
+            key={item.id}
+            className="ghost small"
+            onClick={() => {
+              void api.cancelScheduled(item.id).then(reload);
+            }}
+          >
+            {t("inbox.scheduledCancel", { subject: item.subject || item.to || "" })}
+          </button>
+        ))}
+      </span>
     </div>
   );
 }
