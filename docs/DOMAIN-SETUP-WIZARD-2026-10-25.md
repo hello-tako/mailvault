@@ -103,4 +103,7 @@ Auto-provision (A3, đã ship) tích hợp: nếu setting bật, bước 2 hiệ
 
 > **W5 + W6 ĐÃ SHIP (PR #35, production 11:12Z)** — "vẫn không tự động cấu hình" giải quyết trọn: **Token doctor** `GET /api/domains/:id/token-report` (5 probe read-only, fail nào nêu đúng quyền dashboard cần thêm — lý do #1 domain mới không cấu hình được, giờ nói TRƯỚC khi thử) và **One-click setup** `POST /api/domains/:id/setup-run`: token → nhận (đường sạch; xung đột dừng + nêu đúng quyết định) → **alias đầu tiên** (bước thiếu âm thầm khiến thư bị từ chối sau khi provision thành công) → gửi qua subdomain `send.<domain>` → sending-via → verify trong+ngoài. Wizard: thẻ đầu "Thiết lập tất cả" một chạm, báo cáo từng bước ngay tại chỗ.
 
+> **CHẠY THẬT 2026-10-25 (browser automation, PR #36 kèm theo):** đã điều khiển trình duyệt qua Cloudflare dashboard + MailVault production. takolio.app: Not configured → **Ready trọn vẹn** (nhận + hello@takolio.app + send.takolio.app gửi + verify DNS công cộng) bằng nút Run setup. Hai bài học đo được đã vá/ghi nhận: (1) probe token báo nhầm thiếu quyền — Email Sending chỉ tồn tại cấp Account và preview 400 khi tên không phải subdomain → PR #36 (fail chỉ khi 401/403); (2) `/email/routing/enable` 403 với zone chưa từng bật Email Routing dù token đủ — cần bật 1 lần trong dashboard (Settings → DNS records → Add missing records), sau đó API tự làm hết. vnecs.org (MX Zoho) đúng thiết kế chờ owner quyết takeover.
+
+
 *Tài liệu này là kế hoạch thực thi cho yêu cầu 2026-10-25; các lát W1–W4 cập nhật trạng thái ngay dưới bảng ở mục 3 khi ship.*
