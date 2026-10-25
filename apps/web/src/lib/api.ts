@@ -179,6 +179,10 @@ export const api = {
       "/domains/sync",
       mutation(),
     ),
+  /** The Mail Setup wizard's one-read diagnosis (W1): read-only, ordered next steps. */
+  domainSetup: (zoneId: string) =>
+    request<Record<string, unknown>>(`/domains/${encodeURIComponent(zoneId)}/setup`),
+
   /** Opt-in: Sync may itself enable mail on newly discovered zones preflight clears. */
   getAutoProvision: () => request<{ enabled: boolean }>("/domains/auto-provision"),
   setAutoProvision: (enabled: boolean) =>

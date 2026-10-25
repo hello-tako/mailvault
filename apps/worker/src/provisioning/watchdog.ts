@@ -17,7 +17,7 @@ const empty = (): DriftReport => ({ checked: 0, ok: [], drifted: [], restored: [
  *
  * `null` means the probe itself could not answer, which is never evidence about the domain.
  */
-async function publicMxResolvable(name: string): Promise<boolean | null> {
+export async function publicMxResolvable(name: string): Promise<boolean | null> {
   try {
     const res = await fetch(
       `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=MX`,
