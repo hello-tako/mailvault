@@ -159,6 +159,8 @@ B1 → B5 (resend) → B4 (forward + attach-from-mail) → B9 (bounce notify) �
 
 ### R3 — "Đọc như mailbox thật" (tuần 5–6)
 
+> **Trạng thái 2026-10-25 — 2 lát ĐÃ SHIP.** C1 FTS nội dung thư (PR #26: migration 0022 cột body cap 20k ký tự, mọi writer ghi body, cron backfill từ R2 mỗi giờ 800 thư tới khi xong — switch `ftsBodyBackfill` trong app_settings) và D1 mute (PR #26: migration 0023, gate tại consumer sau commit chỉ chặn ping/toast/nudge, menu "Mute this sender" + nút alias). C4 + C5 (PR #27): separator ngày (mobile gọn để giữ contract "mail bắt đầu gần đỉnh"), gấp quote trong TextBody, "Mark all read" theo đúng filter của list (`POST /api/messages/read-all`), overlay `?` liệt kê toàn bộ phím tắt. Test lần lượt: 495/116/66. Còn của R3: C2 ảnh cid + lightbox, C3 dark-mode HTML, C6 swipe/density/zoom, C7 full headers + print, C8 thread xếp chồng + reply-all, C9 ics/vCard/winmail, C10 block sender, C11 translate, C12 search phrase/subject:/has:, C13 panes resize. Còn của D: D2 quiet hours+digest, D3 notification actions+grouping, D4 device management, D5 since-you-left, D6 urgency/TTL, D7 ops-alert mở rộng, D8 đã SHIP ở R1 (badge).
+
 C1 (FTS body + backfill) → C2 (cid images + lightbox) → C4 (quote folding) → C5 (date groups, mark-all-read, `?`, per-sender images) → C8 (thread stacked + reply-all) → C6 (swipe/density/zoom) → C3 (dark HTML) → C7 (headers + print) → C13.
 
 **Definition of done**: tìm thấy thư theo nội dung body (p95 ≤ 300ms @50k sau backfill); mail newsletter nhiều ảnh renders đầy đủ inline; thread đọc không phải rời màn hình; E2E 412px cho swipe + fold xanh.
