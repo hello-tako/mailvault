@@ -13,12 +13,14 @@
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Emphasis and links inside one line. Escaped first, so a tag typed as text stays text. */
+/** Emphasis, links and the composer's inline-image syntax inside one line. Escaped first,
+ * so a tag typed as text stays text; only cid: images render, never a hotlinked https one. */
 function inlineMarkdown(raw: string): string {
   return escapeHtml(raw)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+    .replace(/!\[([^\]\n]*)\]\((cid:[A-Za-z0-9][A-Za-z0-9._-]{0,60})\)/g, '<img src="$2" alt="$1">')
     .replace(/\[([^\]\n]+)\]\((https:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
 }
 

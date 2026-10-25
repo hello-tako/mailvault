@@ -945,6 +945,50 @@ describe("sending a failed message again (B5)", () => {
     expect(res.status).toBe(400);
     expect((await j(res)).error.code).toBe("NOT_FOUND");
   });
+
+  it("carries an inline image out as a cid part and back as pixels (B3+C2)", async () => {
+    const png1x1 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const { body } = await composeWith({
+      subject: "with an inline picture",
+      text: "here is the shot\n\n![](cid:cidfile-t1)",
+      attachments: [
+        { filename: "shot.png", type: "image/png", content: png1x1, inline: true, cidToken: "cidfile-t1" },
+      ],
+    });
+    expect(body.id).toBeTruthy();
+
+    // On the wire: an inline part carrying the cid name, and an HTML body that points at it.
+    const wire = sent[sent.length - 1];
+    expect(wire.attachments[0].disposition).toBe("inline");
+    expect(wire.attachments[0].contentId).toBe("cidfile-t1");
+    expect(wire.html).toContain('<img src="cid:cidfile-t1"');
+
+    // Kept: the attachment row remembers the cid name so the reader can resolve it.
+    const row = await DB.prepare(`SELECT content_id AS cid FROM attachments WHERE message_id = ?1`)
+      .bind(body.id)
+      .first<any>();
+    expect(row.cid).toBe("cidfile-t1");
+
+    // And read back: the same message's detail resolves the cid into the pixels themselves.
+    const detail = await j(
+      await worker.fetch(req(`/api/messages/${body.id}`, { headers: H }), TEST_ENV, CTX),
+    );
+    expect(detail.htmlBody).toContain("data:image/png;base64,");
+    expect(detail.htmlBody).not.toContain("cid:cidfile-t1");
+  });
+
+  it("drops an inline reference the message has no file for, rather than a broken frame", async () => {
+    const { body } = await composeWith({
+      subject: "dangling picture",
+      text: "![](cid:cidfile-nope) and words",
+    });
+    const detail = await j(
+      await worker.fetch(req(`/api/messages/${body.id}`, { headers: H }), TEST_ENV, CTX),
+    );
+    expect(detail.htmlBody).not.toContain("cid:");
+    expect(detail.htmlBody).not.toContain("<img");
+  });
 });
 
 describe("listing received and sent mail", () => {

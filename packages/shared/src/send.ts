@@ -57,9 +57,23 @@ export const ComposeAttachmentSchema = z.object({
     .transform((v) => v || "application/octet-stream"),
   content: Base64Content,
 });
-export type ComposeAttachment = z.infer<typeof ComposeAttachmentSchema>;
+export type ComposeAttachment = z.infer<typeof InlineAttachmentSchema>;
 
-const AttachmentList = z.array(ComposeAttachmentSchema).max(SEND_LIMITS.maxAttachments).optional();
+/** Show inside the message rather than riding under it (B3): the HTML body references the
+ * file through the token, the worker carries it on the wire as an inline part. */
+export const InlineAttachmentSchema = ComposeAttachmentSchema.extend({
+  inline: z.boolean().optional(),
+  /** The `cid:` name the body's markdown uses for this file, minted by the composer. */
+  cidToken: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/, "cidToken must be a plain cid name")
+    .optional(),
+});
+
+const AttachmentList = z
+  .array(InlineAttachmentSchema)
+  .max(SEND_LIMITS.maxAttachments)
+  .optional();
 
 const AddressList = z.array(z.string().trim().min(3).max(254)).max(SEND_LIMITS.maxDraftAddresses);
 

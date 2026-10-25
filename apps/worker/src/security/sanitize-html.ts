@@ -54,13 +54,17 @@ function sanitizeHref(value: string): string | null {
   return v;
 }
 
-function sanitizeImgSrc(value: string, allowRemote: boolean): string | null {
+function sanitizeImgSrc(value: string, allowRemote: boolean, keepCid = false): string | null {
+  // A cid: reference points at the message's own attachment, not at the network — no
+  // tracking pixel can ride one, so the reader's detail route may keep them to resolve
+  // server-side into data URLs (plan C2/B3).
+  if (keepCid && /^cid:/i.test(value.trim())) return value.trim();
   if (!allowRemote) return null; // block remote/tracking images by default
   const v = value.trim();
   return /^https:\/\//i.test(v) ? v : null; // https only, never http
 }
 
-function filterAttributes(tag: string, raw: string, allowRemoteImages: boolean): string {
+function filterAttributes(tag: string, raw: string, allowRemoteImages: boolean, keepCidImages: boolean): string {
   const attrs = parseAttributes(raw);
   const kept: string[] = [];
   const isAnchor = tag === "a";
@@ -75,7 +79,7 @@ function filterAttributes(tag: string, raw: string, allowRemoteImages: boolean):
       continue;
     }
     if (name === "src" && tag === "img") {
-      const src = value ? sanitizeImgSrc(value, allowRemoteImages) : null;
+      const src = value ? sanitizeImgSrc(value, allowRemoteImages, keepCidImages) : null;
       if (src) kept.push(`src="${escapeAttr(src)}"`);
       continue;
     }
@@ -99,11 +103,14 @@ function escapeAttr(v: string): string {
 
 export interface SanitizeOptions {
   allowRemoteImages?: boolean;
+  /** Keep `src="cid:…"` references (the message's own attachments) instead of dropping them. */
+  keepCidImages?: boolean;
   maxChars?: number;
 }
 
 export function sanitizeEmailHtml(input: string, opts: SanitizeOptions = {}): string {
   const allowRemote = opts.allowRemoteImages ?? false;
+  const keepCid = opts.keepCidImages ?? false;
   const maxChars = opts.maxChars ?? 500_000;
   if (!input) return "";
 
@@ -128,7 +135,7 @@ export function sanitizeEmailHtml(input: string, opts: SanitizeOptions = {}): st
       out += `</${tag}>`;
     } else {
       const selfClose = full.trimEnd().endsWith("/>");
-      const allowed = filterAttributes(tag, attrRaw, allowRemote);
+      const allowed = filterAttributes(tag, attrRaw, allowRemote, keepCid);
       out += `<${tag}${allowed}${selfClose ? " /" : ""}>`;
     }
   }

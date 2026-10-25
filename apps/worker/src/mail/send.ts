@@ -278,14 +278,14 @@ export async function sendOutbound(
     // "sanitised server-side the same way received HTML is", and the stored .eml is what a
     // later download hands out. https images survive: they are the owner's own choice in a
     // message being sent, unlike a stranger's tracking pixels in one being read.
-    req.html = sanitizeEmailHtml(req.html, { allowRemoteImages: true });
+    req.html = sanitizeEmailHtml(req.html, { allowRemoteImages: true, keepCidImages: true });
   }
   // Markdown writes itself into the alternative part (B2): the plain text stays exactly
   // what the owner typed, and the HTML those same keystrokes become is generated here and
   // passes the sanitizer below like any other body. Explicit HTML, when a client sends it,
   // always wins.
   if (!req.html && req.text.trim()) {
-    req.html = sanitizeEmailHtml(markdownToHtml(req.text), { allowRemoteImages: true });
+    req.html = sanitizeEmailHtml(markdownToHtml(req.text), { allowRemoteImages: true, keepCidImages: true });
   }
   if (!req.text.trim() && !req.html?.trim()) return fail("EMPTY_BODY", "Write something first.");
 
@@ -378,7 +378,8 @@ export async function sendOutbound(
         contentType: f.input.type,
         size: f.bytes.byteLength,
         r2Key: key,
-        contentId: null,
+        // The inline image's cid: name, so the reader can resolve it back into pixels.
+        contentId: f.input.inline && f.input.cidToken ? f.input.cidToken : null,
       };
     });
     const stagedKeys = [rawKey, ...attachmentRows.map((row) => row.r2Key), parsedKey];
@@ -463,12 +464,25 @@ export async function sendOutbound(
     const extraHeaders = replyHeaders(inReplyTo, references);
     // The safe name again rather than the owner's original: this is the copy that reaches another
     // provider's parser, and the content is handed over exactly as it arrived, already base64.
-    const wireAttachments: EmailAttachment[] = files.map((f) => ({
-      disposition: "attachment",
-      filename: f.safeName,
-      type: f.input.type,
-      content: f.input.content,
-    }));
+    // An inline image is carried as the part its cid: name points at; everything else
+    // rides under the message as it always did. The union type is why the two shapes are
+    // built separately rather than toggled field by field.
+    const wireAttachments: EmailAttachment[] = files.map((f) =>
+      f.input.inline && f.input.cidToken
+        ? {
+            disposition: "inline",
+            contentId: f.input.cidToken,
+            filename: f.safeName,
+            type: f.input.type,
+            content: f.input.content,
+          }
+        : {
+            disposition: "attachment",
+            filename: f.safeName,
+            type: f.input.type,
+            content: f.input.content,
+          },
+    );
     // Last, after every policy has been checked: "this server cannot send" must never be the
     // reason given for a message that was refused because it should not have been sent at all.
     if (!env.EMAIL) {

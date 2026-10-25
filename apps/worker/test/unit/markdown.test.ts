@@ -36,3 +36,18 @@ describe("markdownToHtml (the compose box's formatting)", () => {
     expect(markdownToHtml("[t](http://e.example)")).toBe("<p>[t](http://e.example)</p>");
   });
 });
+
+describe("markdownToHtml inline images (B3)", () => {
+  it("renders a cid image reference with its alt text", () => {
+    expect(markdownToHtml("look: ![a chart](cid:cidfile-abc-1)")).toBe(
+      '<p>look: <img src="cid:cidfile-abc-1" alt="a chart"></p>',
+    );
+  });
+
+  it("does not render a hotlinked image — only the message's own files ride inside", () => {
+    // The ! survives as text: markdown's negation, not an image tag.
+    expect(markdownToHtml("![x](https://tracker.example/pixel.gif)")).toBe(
+      '<p>!<a href="https://tracker.example/pixel.gif">x</a></p>',
+    );
+  });
+});

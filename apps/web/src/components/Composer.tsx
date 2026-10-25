@@ -51,6 +51,10 @@ interface PendingFile {
   size: number;
   /** The same bytes as the request carries them. */
   content: string;
+  /** An image may live inside the text rather than under it (B3): the cid name the body
+   * references and the wire part will both carry. */
+  inline?: boolean;
+  cidToken?: string;
 }
 
 /** Base64 of a file, chunked so a large one cannot blow the argument list. */
@@ -337,6 +341,23 @@ export function Composer({
    * four good invoices because the fifth was a video nobody meant to attach would throw away
    * work the owner just did.
    */
+  /** Markdown for one inline image, placed where the cursor is — the owner sees the
+   * picture's place in the text as they write it, not after it leaves. */
+  function insertAtCursor(snippet: string) {
+    const el = body.current;
+    if (!el) {
+      setText((current) => current + snippet);
+      return;
+    }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? start;
+    setText(text.slice(0, start) + snippet + text.slice(end));
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + snippet.length, start + snippet.length);
+    });
+  }
+
   async function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = [...(e.target.files ?? [])];
     // Cleared first, or choosing the same file again after removing it would be no change.
@@ -355,9 +376,24 @@ export function Composer({
         );
         continue;
       }
-      accepted.push(await readAsBase64(f));
+      const base = await readAsBase64(f);
+      if (f.type.startsWith("image/")) {
+        accepted.push({
+          ...base,
+          inline: true,
+          cidToken: `cidfile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        });
+      } else {
+        accepted.push(base);
+      }
     }
-    if (accepted.length > 0) setFiles((current) => [...current, ...accepted]);
+    if (accepted.length > 0) {
+      setFiles((current) => [...current, ...accepted]);
+      const images = accepted.filter((f) => f.inline && f.cidToken);
+      if (images.length) {
+        insertAtCursor(images.map((f) => `![](cid:${f.cidToken})`).join("\n"));
+      }
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -365,7 +401,12 @@ export function Composer({
     if (!canSend || busy) return;
     setBusy(true);
     setError(null);
-    const attachments = files.map((f) => ({ filename: f.name, type: f.type, content: f.content }));
+    const attachments = files.map((f) => ({
+      filename: f.name,
+      type: f.type,
+      content: f.content,
+      ...(f.inline && f.cidToken ? { inline: true, cidToken: f.cidToken } : {}),
+    }));
     try {
       const ccList = splitAddresses(cc);
       const bccList = splitAddresses(bcc);
@@ -576,11 +617,34 @@ export function Composer({
                 <li key={`${f.name}-${i}`}>
                   <span className="file-name">{f.name}</span>
                   <span className="faint">{formatBytes(f.size)}</span>
+                  {f.cidToken ? (
+                    <label className="check small">
+                      <input
+                        type="checkbox"
+                        checked={!!f.inline}
+                        onChange={(e) => {
+                          const inline = e.target.checked;
+                          setFiles((current) =>
+                            current.map((file, j) => (j === i ? { ...file, inline } : file)),
+                          );
+                          if (!inline && f.cidToken) {
+                            setText((current) => current.replace(`![](cid:${f.cidToken})`, ""));
+                          } else if (inline && f.cidToken && !text.includes(`cid:${f.cidToken}`)) {
+                            insertAtCursor(`![](cid:${f.cidToken})`);
+                          }
+                        }}
+                      />
+                      {t("composer.inlineImage")}
+                    </label>
+                  ) : null}
                   <button
                     type="button"
                     className="ghost small"
                     aria-label={t("composer.removeFile", { name: f.name })}
-                    onClick={() => setFiles((current) => current.filter((_, j) => j !== i))}
+                    onClick={() => {
+                      setFiles((current) => current.filter((_, j) => j !== i));
+                      if (f.cidToken) setText((current) => current.replace(`![](cid:${f.cidToken})`, ""));
+                    }}
                   >
                     ×
                   </button>
