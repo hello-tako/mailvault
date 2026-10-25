@@ -251,6 +251,22 @@ export function MessageDetail({
                 label={t("common.more")}
                 items={[
                   { label: t("msg.forward"), onSelect: () => setForwarding(true) },
+                  ...(!sent && data.envelopeFrom
+                    ? [
+                        {
+                          label: t("msg.saveContact"),
+                          onSelect: () => {
+                            void api
+                              .saveContact({
+                                address: data.envelopeFrom,
+                                name: senderName(data.headerFrom, data.envelopeFrom),
+                              })
+                              .then(() => setNotice(t("msg.contactSaved")))
+                              .catch(() => undefined);
+                          },
+                        },
+                      ]
+                    : []),
                   ...(senderDomain
                     ? [
                         {
@@ -517,6 +533,7 @@ export function MessageDetail({
             sendableAliases={outbox.aliases}
             remaining={outbox.capabilities?.remaining ?? 0}
             bindingMissing={outbox.capabilities?.bindingMissing}
+            onScheduled={() => setNotice(t("msg.scheduled"))}
             onClose={() => setForwarding(false)}
             onSent={() => {
               setForwarding(false);
@@ -535,6 +552,7 @@ export function MessageDetail({
             sendableAliases={outbox.aliases}
             remaining={outbox.capabilities?.remaining ?? 0}
             bindingMissing={outbox.capabilities?.bindingMissing}
+            onScheduled={() => setNotice(t("msg.scheduled"))}
             onClose={() => setReplying(false)}
             onSent={() => {
               setReplying(false);

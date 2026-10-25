@@ -1,14 +1,33 @@
 import { Hono } from "hono";
-import { ComposeInputSchema, RecipientQuerySchema, SEND_LIMITS } from "@mailvault/shared";
+import {
+  ComposeInputSchema,
+  RecipientQuerySchema,
+  ReplyInputSchema,
+  SEND_LIMITS,
+} from "@mailvault/shared";
+import { z } from "zod";
 import type { AppEnv } from "../app-env";
 import { maxSendsPerDay } from "../env";
 import { AppError, notFound } from "../lib/errors";
 import { log } from "../lib/logging";
 import { nowIso } from "../lib/util";
 import { listDomains } from "../db/domains";
+import { listContacts } from "../db/contacts";
 import { countSentSince, listCorrespondents, listThread } from "../db/messages";
 import { sendIdempotencyKey, sendOutbound } from "../mail/send";
-import { actorOf, parseQuery, readJson } from "./_helpers";
+import {
+  cancelScheduledSend,
+  listWaitingScheduled,
+  scheduleSend,
+} from "../mail/scheduled";
+
+import { actorOf, asApiError, parseQuery, readJson } from "./_helpers";
+
+const ScheduleBodySchema = z.object({
+  kind: z.enum(["compose", "reply"]),
+  input: z.record(z.string(), z.unknown()),
+  delaySeconds: z.number().int().min(5).max(86_400),
+});
 
 const dayStart = () => `${nowIso().slice(0, 10)}T00:00:00.000Z`;
 
@@ -84,9 +103,58 @@ export const outboxRoute = new Hono<AppEnv>()
    * everyone the owner has written to. Capped and filtered server-side so a keystroke cannot
    * enumerate the whole correspondence.
    */
+  /** Schedule a send for later (B6): the whole compose request waits in the vault, and a
+   * delayed queue message — carrying only the row id — fires it. Undo is a row update. */
+  .post("/api/outbox/schedule", async (c) => {
+    const body = await readJson(c, ScheduleBodySchema);
+    if (!c.env.SCHEDULER_Q) {
+      throw new AppError(503, "SCHEDULER_UNAVAILABLE", "This server has no scheduler queue configured.");
+    }
+    // Validated now, not at fire time: a request that could never send should be refused
+    // while the owner is still looking at the composer.
+    const input = body.kind === "reply" ? ReplyInputSchema.parse(body.input) : ComposeInputSchema.parse(body.input);
+    const { id, sendAt } = await scheduleSend(c.env.DB, {
+      kind: body.kind,
+      payload: input as unknown as Record<string, unknown>,
+      delaySeconds: body.delaySeconds,
+    });
+    await c.env.SCHEDULER_Q.send({ id }, { delaySeconds: Math.min(Math.max(body.delaySeconds, 5), 86_400) });
+    log.info("send_scheduled", { id, actor: actorOf(c).email, sendAt });
+    return c.json({ id, sendAt }, 201);
+  })
+
+  .get("/api/scheduled", async (c) => {
+    try {
+      return c.json({ items: await listWaitingScheduled(c.env.DB) });
+    } catch (err) {
+      throw asApiError(err);
+    }
+  })
+
+  .post("/api/scheduled/:id/cancel", async (c) => {
+    const id = c.req.param("id");
+    const cancelled = await cancelScheduledSend(c.env.DB, id);
+    log.info("scheduled_cancelled", { id, cancelled, actor: actorOf(c).email });
+    return c.json({ cancelled });
+  })
+
   .get("/api/recipients", async (c) => {
     const { q } = parseQuery(c, RecipientQuerySchema);
-    const items = await listCorrespondents(c.env.DB, q, 8);
+    // Contacts the owner kept come first (B10); correspondence history fills the rest.
+    const [contacts, history] = await Promise.all([
+      listContacts(c.env.DB, q),
+      listCorrespondents(c.env.DB, q, 8),
+    ]);
+    const seen = new Set<string>();
+    const items = [
+      ...contacts.slice(0, 4).map((ct) => ({ address: ct.address, name: ct.name, lastSeen: ct.updatedAt, outgoing: false, contact: true })),
+      ...history.map((h) => ({ ...h, contact: false })),
+    ].filter((sug) => {
+      const key = sug.address.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     return c.json({ items });
   })
 

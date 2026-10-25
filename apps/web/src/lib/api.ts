@@ -97,6 +97,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // The Worker requires this custom header on state-changing calls as a CSRF signal, and
 // looks for the step-up grant on the ones that cannot be undone.
+/** A send still waiting for its moment (B6). */
+export interface ScheduledSend {
+  id: string;
+  kind: string;
+  sendAt: string;
+  subject: string | null;
+  to: string | null;
+}
+
+/** An address the owner chose to keep (B10). */
+export interface Contact {
+  id: string;
+  address: string;
+  name: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A draft as the vault keeps it (B4). */
 export interface Draft {
   id: string;
@@ -273,6 +292,21 @@ export const api = {
       `/messages/read-all?${new URLSearchParams(Object.entries(query).filter(([, v]) => v) as [string, string][])}`,
       mutation(),
     ),
+
+  /** A send that waits its turn (B6): the whole request sleeps in the vault; undo cancels. */
+  scheduleSend: (kind: "compose" | "reply", input: Record<string, unknown>, delaySeconds: number) =>
+    request<{ id: string; sendAt: string }>("/outbox/schedule", mutation({ kind, input, delaySeconds })),
+  scheduledList: () => request<{ items: ScheduledSend[] }>("/scheduled"),
+  cancelScheduled: (id: string) =>
+    request<{ cancelled: boolean }>(`/scheduled/${encodeURIComponent(id)}/cancel`, mutation()),
+
+  /** The owner's kept addresses (B10). */
+  listContacts: (q?: string) =>
+    request<{ items: Contact[] }>(`/contacts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  saveContact: (input: { address: string; name?: string | null; note?: string | null }) =>
+    request<Contact>("/contacts", mutation(input)),
+  deleteContact: (id: string) =>
+    request<{ removed: boolean }>(`/contacts/${encodeURIComponent(id)}`, mutation(undefined, "DELETE")),
 
   /** The compose-in-progress, kept in the vault (B4) so it follows the owner's devices. */
   getDraft: (id: string) =>

@@ -18,7 +18,7 @@ import { newId, sha256Hex } from "../lib/util";
 import { writeMetric } from "../lib/metrics";
 import { findActiveAliasByAddress } from "../db/aliases";
 import { getDomainById } from "../db/domains";
-import {
+import { findAttachment,
   findThreadRoot,
   getMessageRow,
   indexMessage,
@@ -70,6 +70,8 @@ export interface OutboundRequest {
   replyToMessageId?: string;
   /** Files as the compose screen read them: base64, with the name the owner's file had. */
   attachments?: ComposeAttachment[];
+  /** Files already in the vault to copy along (B2). */
+  attachmentRefs?: Array<{ messageId: string; attachmentId: string }>;
 }
 
 export type SendResult =
@@ -289,7 +291,22 @@ export async function sendOutbound(
   }
   if (!req.text.trim() && !req.html?.trim()) return fail("EMPTY_BODY", "Write something first.");
 
-  const prepared = prepareFiles(req.attachments);
+  // Files kept from an earlier message ride along without round-tripping through the
+  // browser: the vault hands its own bytes back to itself (B2).
+  const attachments = [...(req.attachments ?? [])];
+  for (const ref of req.attachmentRefs ?? []) {
+    const att = await findAttachment(db, ref.messageId, ref.attachmentId);
+    if (!att) return fail("BAD_ATTACHMENT", "A file chosen from an earlier message is no longer there.");
+    const obj = await getObject(bucket, att.r2_key);
+    if (!obj) return fail("BAD_ATTACHMENT", "A file chosen from an earlier message could not be read.");
+    attachments.push({
+      filename: att.filename,
+      type: att.content_type || "application/octet-stream",
+      content: encodeBase64(new Uint8Array(await obj.arrayBuffer())),
+    });
+  }
+
+  const prepared = prepareFiles(attachments);
   if (!prepared.ok) return fail(prepared.refusal.code, prepared.refusal.message);
   const files = prepared.files;
 

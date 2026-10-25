@@ -75,6 +75,14 @@ const AttachmentList = z
   .max(SEND_LIMITS.maxAttachments)
   .optional();
 
+/** A file already in the vault, riding along instead of being re-uploaded (B2). The worker
+ * copies the bytes from R2 itself; the request never carries them. */
+export const AttachmentRefSchema = z.object({
+  messageId: z.string().min(1),
+  attachmentId: z.string().min(1),
+});
+const AttachmentRefList = z.array(AttachmentRefSchema).max(SEND_LIMITS.maxAttachments).optional();
+
 const AddressList = z.array(z.string().trim().min(3).max(254)).max(SEND_LIMITS.maxDraftAddresses);
 
 /**
@@ -105,6 +113,7 @@ export const ComposeInputSchema = z.object({
   /** Mail id this compose answers. Sets In-Reply-To/References and joins its thread. */
   replyToMessageId: z.string().min(1).optional(),
   attachments: AttachmentList,
+  attachmentRefs: AttachmentRefList,
 });
 export type ComposeInput = z.infer<typeof ComposeInputSchema>;
 
@@ -121,6 +130,7 @@ export const ReplyInputSchema = z.object({
   /** Extra recipients to bring in, beyond the one the message came from. */
   cc: AddressList.optional(),
   attachments: AttachmentList,
+  attachmentRefs: AttachmentRefList,
 });
 export type ReplyInput = z.infer<typeof ReplyInputSchema>;
 

@@ -72,7 +72,8 @@
   // `wrangler queues subscription create` — see DEPLOYMENT.md.
   "queues": {
     "producers": [
-      { "binding": "MAIL_INGEST_QUEUE", "queue": "mail-ingest" }
+      { "binding": "MAIL_INGEST_QUEUE", "queue": "mail-ingest" },
+      { "binding": "SCHEDULER_Q", "queue": "mail-send-scheduler" }
     ],
     "consumers": [
       {
@@ -82,6 +83,14 @@
         "max_retries": 3,
         "max_concurrency": 5,
         "dead_letter_queue": "mail-ingest-dlq"
+      },
+      {
+        // Calls back scheduled sends when their wait is up. The message body is a row id
+        // only; a cancelled or already-sent row acks straight through.
+        "queue": "mail-send-scheduler",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3
       },
       {
         "queue": "mail-delivery-events",

@@ -16,6 +16,8 @@ export interface Env {
    * the dead-letter queue with its R2 objects still in place.
    */
   MAIL_INGEST_QUEUE: Queue<IngestJob>;
+  /** Fires a scheduled send when its wait is up; the body is a scheduled_sends row id (B6). */
+  SCHEDULER_Q?: Queue<{ id: string }>;
   /** Per-owner websocket hub for "new mail" nudges to already-open tabs. */
   MAILBOX_HUB: DurableObjectNamespace;
   /**

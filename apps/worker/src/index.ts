@@ -21,6 +21,7 @@ import { log } from "./lib/logging";
 import { runWatchdog } from "./provisioning/watchdog";
 import { getSetting, setSetting } from "./db/settings";
 import { backfillFtsBodies } from "./mail/fts-backfill";
+import { processScheduledSend } from "./mail/scheduled";
 import { isNotificationMuted } from "./db/notifications";
 import { drainDeletionJobs } from "./db/deletions";
 
@@ -107,6 +108,10 @@ export default {
    * look like a delivery event get applied as one.
    */
   async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (batch.queue === "mail-send-scheduler") {
+      await consumeSchedulerBatch(batch as MessageBatch<{ id: string }>, env);
+      return;
+    }
     if (batch.queue === deliveryEventsQueue(env)) {
       await consumeDeliveryBatch(batch, env, ctx);
       return;
@@ -249,6 +254,23 @@ async function consumeIngestBatch(
  * turns an unknown message id into a known one. Nothing here touches R2 — a delivery event
  * reports on a message, it is not a copy of one.
  */
+/** The scheduler's queue: each message is one scheduled_sends row id (B6). */
+async function consumeSchedulerBatch(batch: MessageBatch<{ id: string }>, env: Env): Promise<void> {
+  for (const message of batch.messages) {
+    try {
+      const outcome = await processScheduledSend(env, message.body.id);
+      writeMetric(env, "scheduled_send", { outcome });
+      message.ack();
+    } catch (err) {
+      log.error("scheduled_send_error", {
+        id: message.body?.id,
+        error: err instanceof Error ? err.message : "error",
+      });
+      message.retry();
+    }
+  }
+}
+
 async function consumeDeliveryBatch(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
   try {
     const tally = await consumeDeliveryEvents(
