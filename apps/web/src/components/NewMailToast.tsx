@@ -26,14 +26,27 @@ export function NewMailToast() {
         .catch(() => null);
 
     void total().then((v) => {
-      if (v !== null) baseline.current = v;
+      if (v === null || !alive) return;
+      // D5: arriving is the moment to say what arrived while away — the count above what
+      // was left unread last time — then remember today's floor for next time.
+      const lastSeen = Number(localStorage.getItem("mailvault-last-unread") ?? "0");
+      if (v > lastSeen && lastSeen >= 0 && sessionStorage.getItem("mailvault-said-hello") !== "1") {
+        sessionStorage.setItem("mailvault-said-hello", "1");
+        setCount(v - lastSeen);
+      }
+      baseline.current = v;
     });
 
+    const remember = (v: number | null) => {
+      if (v !== null) localStorage.setItem("mailvault-last-unread", String(v));
+    };
+    void total().then(remember);
     const onNewMail = async () => {
       const now = await total();
       if (now === null || !alive) return;
       const before = baseline.current;
       baseline.current = now;
+      remember(now);
       if (before === null || now <= before) return;
       setCount(now - before);
     };

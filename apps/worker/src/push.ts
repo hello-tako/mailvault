@@ -114,7 +114,10 @@ async function pushOne(target: PushTarget, cfg: { jwk: JsonWebKey; subject: stri
       method: "POST",
       redirect: "error",
       headers: {
-        TTL: "3600",
+        TTL: "21600",
+        Urgency: "high",
+        // `low` told push services to batch — and OTP mail arrived minutes late (measured).
+        // `high` asks for prompt delivery; a personal mailbox has no bulk mail to defer. (D6)
         // Deliberately no `Urgency` header, i.e. RFC 8030's `normal`. Sending `low` told
         // the push service it may batch this, and a verification code then surfaced as a
         // notification minutes after the mail was already sitting in the inbox.

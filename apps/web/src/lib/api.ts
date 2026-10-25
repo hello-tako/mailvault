@@ -300,6 +300,16 @@ export const api = {
   cancelScheduled: (id: string) =>
     request<{ cancelled: boolean }>(`/scheduled/${encodeURIComponent(id)}/cancel`, mutation()),
 
+  /** Quiet hours (D2): stored as minutes-from-local-midnight plus the owner's offset. */
+  getQuietHours: () =>
+    request<{ quietHours: { startMin: number; endMin: number; tzOffsetMin: number } | null }>(
+      "/notifications/quiet-hours",
+    ),
+  setQuietHours: (input: { startMin: number; endMin: number; tzOffsetMin: number }) =>
+    request<{ quietHours: typeof input }>("/notifications/quiet-hours", mutation(input)),
+  clearQuietHours: () =>
+    request<{ quietHours: null }>("/notifications/quiet-hours", mutation(undefined, "DELETE")),
+
   /** Read a message in another language (C11): made on demand, never stored. */
   translateMessage: (id: string, to: "vi" | "en") =>
     request<{ to: string; text: string }>(`/messages/${encodeURIComponent(id)}/translate`, mutation({ to })),
