@@ -5,6 +5,7 @@ import { withStepUp } from "../lib/passkeys";
 import { useAsync } from "../lib/useAsync";
 import { relativeTime } from "../lib/format";
 import { t } from "../lib/i18n";
+import { SetupWizard } from "../components/domains/SetupWizard";
 import {
   ConfirmDialog,
   EmptyState,
@@ -140,6 +141,7 @@ export function Domains() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmProvision, setConfirmProvision] = useState(false);
+  const [setupZone, setSetupZone] = useState<string | null>(null);
   const [takeover, setTakeover] = useState(false);
   const [mxTakeover, setMxTakeover] = useState(false);
   const [removing, setRemoving] = useState<Domain | null>(null);
@@ -622,6 +624,10 @@ export function Domains() {
                                 ]
                               : []),
                             {
+                              label: t("wiz.open"),
+                              onSelect: () => setSetupZone(d.cloudflareZoneId),
+                            },
+                            {
                               label: t("dom.remove"),
                               danger: true,
                               disabled: busy,
@@ -790,7 +796,21 @@ export function Domains() {
         </Modal>
       )}
 
+      {setupZone ? (
+        <SetupWizard
+          zoneId={setupZone}
+          onClose={() => setSetupZone(null)}
+          onOpenSending={() => {
+            const zone = setupZone;
+            setSetupZone(null);
+            setSendingFor(domains.find((d) => d.cloudflareZoneId === zone) ?? null);
+          }}
+          onChanged={reload}
+        />
+      ) : null}
+
       {sendingFor && (
+
         <SendingDialog
           domain={sendingFor}
           onClose={() => setSendingFor(null)}

@@ -16,13 +16,15 @@ import {
   upsertDiscoveredZones,
 } from "../db/domains";
 import { preflightMany, provisionMany, provisionDomain } from "../provisioning/provisioner";
-import { runWatchdog } from "../provisioning/watchdog";
+import { buildSetupNext, type SetupSnapshot } from "../provisioning/setup";
+import { publicMxResolvable, runWatchdog } from "../provisioning/watchdog";
 import { log } from "../lib/logging";
 import { badRequest, notFound, AppError } from "../lib/errors";
 import { actorOf, asApiError, cfClient, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
-import { verifyDeliveryPath } from "../provisioning/preflight";
+import { preflightZone, verifyDeliveryPath } from "../provisioning/preflight";
 import { getSetting, setSetting } from "../db/settings";
+import type { CfDnsRecord } from "../cf/types";
 
 const ZoneIdParam = z.object({ id: z.string().min(1) });
 
@@ -185,6 +187,74 @@ export const domainsRoute = new Hono<AppEnv>()
     } catch (err) {
       throw asApiError(err);
     }
+  })
+
+  /**
+   * The Mail Setup wizard's one-read diagnosis (plan W1): receiving, sending, public DNS
+   * and the token's reach for one zone, plus the ordered next actions. Read-only.
+   */
+  .get("/api/domains/:id/setup", async (c) => {
+    const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const domain = await getDomainByZoneId(c.env.DB, zoneId);
+    if (!domain) throw notFound("Domain not found");
+    const workerName = requireWorkerName(c.env);
+    const client = cfClient(c.env);
+
+    // Parallel, best-effort: one read failing says something about the token, not the zone.
+    const [pf, path, txt, sendingPreview, sendingNames, dnsPublic] = await Promise.all([
+      preflightZone(client, { zoneId, name: domain.name, status: domain.zoneStatus, type: domain.zoneType }, workerName)
+        .catch(() => null),
+      verifyDeliveryPath(client, zoneId, workerName).catch(() => null),
+      client.listDnsRecords(zoneId, "TXT").catch(() => null) as Promise<CfDnsRecord[] | null>,
+      client.previewSending(zoneId, domain.name).catch(() => null),
+      client.listSendingDomains(zoneId).catch(() => null),
+      publicMxResolvable(domain.name),
+    ]);
+
+    const readsZone = !!pf && pf.classification !== PreflightClassification.ApiPermissionError;
+    const tokenHint = readsZone
+      ? null
+      : "MailVault's API token cannot read this zone. Add the zone (or 'All zones from an " +
+        "account') to the token's Zone Resources, and give it Zone → Email Routing Rules → Edit " +
+        "and Email Sending → Edit — then reopen this screen.";
+
+    const spfRecords = (txt ?? []).map((r: CfDnsRecord) => r.content ?? "").filter((v: string) => /^v=spf1/i.test(v.trim()));
+    const sendingEnabled =
+      domain.sendingStatus === "ENABLED" ||
+      (sendingNames ?? []).some((n: { name?: string; enabled?: boolean }) => n.enabled);
+    const dmarcConflict =
+      sendingPreview?.errors?.some((e: { code?: string }) => ["dmarc.multiple", "dmarc.incompatible"].includes(e.code ?? "")) ?? false;
+
+    const snapshot: SetupSnapshot = {
+      domain: {
+        id: domain.id,
+        zoneId,
+        name: domain.name,
+        mailStatus: domain.mailStatus,
+        sendingStatus: domain.sendingStatus,
+        sendingVia: domain.sendingVia,
+      },
+      token: { readsZone, hint: tokenHint },
+      receiving: {
+        classification: pf?.classification ?? PreflightClassification.ProvisioningError,
+        conflict: pf?.conflict ?? null,
+        routing: path?.routing ?? false,
+        catchAllOurs: path?.catchAllOurs ?? false,
+        mxCloudflare: path?.mx.cloudflareRouting ?? 0,
+        mxForeign: path?.mx.foreign.length ?? 0,
+        mxProviders: path?.mx.providers ?? [],
+      },
+      dnsPublic: { resolvable: dnsPublic },
+      sending: {
+        enabled: !!sendingEnabled,
+        records: (sendingPreview?.records ?? []) as unknown as Array<Record<string, unknown>>,
+        dmarcConflict,
+        unavailableReason: sendingPreview ? null : "sending-preview-unavailable",
+      },
+      spf: { count: spfRecords.length, records: spfRecords },
+    };
+
+    return c.json({ ...snapshot, next: buildSetupNext(snapshot) });
   })
 
   /** Retry = provision one domain; :id is the Cloudflare zone id. */
