@@ -99,4 +99,6 @@ Auto-provision (A3, đã ship) tích hợp: nếu setting bật, bước 2 hiệ
 | Wizard làm Domains.tsx (984 dòng) phình to | Tách `components/domains/SetupWizard.tsx` — Domains.tsx chỉ giữ nút mở dialog |
 | Fallback A2 (tự ghi MX) xung đột priority với MX cũ | Ghi priority thấp hơn (số lớn hơn) MX cũ → sender ưu tiên MX cũ tới khi owner xoá; chỉ xoá sau verify — đúng thứ tự enable-before-delete |
 
-*Tài liệu này là kế hoạch thực thi cho yêu cầu 2026-10-25; cácLAT W1–W4 cập nhật trạng thái ngay dưới bảng ở mục 3 khi ship.*
+> **Trạng thái 2026-10-25 — W1 + W2 ĐÃ SHIP (PR #33, production 10:29Z).** `GET /api/domains/:id/setup` (chẩn đoán song song: token → nhận → DNS công cộng → gửi → SPF, suy ra `next[]` bằng `buildSetupNext` có 5 unit test) + Wizard "Thiết lập mail" trong menu từng domain (thẻ chẩn đoán có màu; Enable receiving leo thang takeover-tick chỉ khi conflict trả lời; mở SendingDialog sẵn có; copy lệnh queue-subscription; đo lại DNS). Còn: **W3** (createDnsRecord + SPF merge + fallback A2 hoàn chỉnh) và **W4** (nút gửi thư test tới domain mới — A8).
+
+*Tài liệu này là kế hoạch thực thi cho yêu cầu 2026-10-25; các lát W1–W4 cập nhật trạng thái ngay dưới bảng ở mục 3 khi ship.*
