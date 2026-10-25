@@ -27,6 +27,7 @@ export function InboxToolbar({
   grouped,
   onGrouped,
   onRefresh,
+  onMarkAllRead,
   /** The rail carries the mailbox list on a wide screen; a phone still needs the picker. */
   mailboxPicker,
 }: {
@@ -43,6 +44,8 @@ export function InboxToolbar({
   grouped: boolean;
   onGrouped: (next: boolean) => void;
   onRefresh: () => void;
+  /** One switch for the whole unread pile (C5). */
+  onMarkAllRead?: () => void;
   mailboxPicker: boolean;
 }) {
   const intent = useMemo(() => parseSearchQuery(search), [search]);
@@ -128,7 +131,12 @@ export function InboxToolbar({
           >
             {t("inbox.groupConversations")}
           </button>
-          <button type="button" className="ghost small icon" aria-label={t("common.refresh")} title={t("common.refresh")} onClick={onRefresh}>
+          {counters && (counters.inbox?.unread ?? 0) > 0 && onMarkAllRead ? (
+          <button type="button" className="small mark-all" onClick={onMarkAllRead}>
+            {t("inbox.markAllRead")}
+          </button>
+        ) : null}
+        <button type="button" className="ghost small icon" aria-label={t("common.refresh")} title={t("common.refresh")} onClick={onRefresh}>
             ⟳
           </button>
         </div>

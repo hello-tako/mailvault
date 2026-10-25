@@ -1,5 +1,5 @@
 import { withStepUp } from "../lib/passkeys";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { navigate, useRoute } from "../lib/router";
 import { useAsync } from "../lib/useAsync";
@@ -9,7 +9,7 @@ import { queryFor, type View } from "../lib/mailviews";
 import { selectableMailboxes } from "../lib/mailboxes";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { NEW_MAIL_EVENT } from "../lib/live";
-import { t } from "../lib/i18n";
+import { t, lang } from "../lib/i18n";
 import { ConfirmDialog, EmptyState, ErrorBanner, SkeletonList } from "../components/ui";
 import { MsgItem } from "../components/MessageRow";
 import { BulkBar } from "../components/mail/BulkBar";
@@ -31,6 +31,29 @@ const PAGE = 50;
  * pane is a URL parameter rather than component state, so a link to a message works from the
  * palette, a notification, or another tab.
  */
+/** A quiet separator between days, so a long list reads like the calendar it is. */
+function daySeparator(prevIso: string | undefined, iso: string): React.ReactNode {
+  const label = (d: Date): string => {
+    const now = new Date();
+    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+    if (diffDays <= 0) return t("inbox.today");
+    if (diffDays === 1) return t("inbox.yesterday");
+    return d.toLocaleDateString(lang() === "vi" ? "vi-VN" : "en-GB", {
+      day: "numeric",
+      month: "short",
+      year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+    });
+  };
+  const current = label(new Date(iso));
+  if (prevIso && label(new Date(prevIso)) === current) return null;
+  return (
+    <li className="list-sep" role="presentation">
+      {current}
+    </li>
+  );
+}
+
 export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: string }) {
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
@@ -387,7 +410,9 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
               />
             ) : null}
             <ul className="msglist">
-              {items.map((m) => (
+              {items.map((m, i) => (
+                <Fragment key={m.id}>
+                  {daySeparator(items[i - 1]?.receivedAt, m.receivedAt)}
                 <MsgItem
                   key={m.id}
                   m={m}
@@ -400,6 +425,7 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
                   onSelect={selection.toggle}
                   onStar={(row) => void toggleStar(row)}
                 />
+                </Fragment>
               ))}
             </ul>
           </div>
@@ -499,6 +525,14 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
           localStorage.setItem("mailvault-threaded", next ? "1" : "0");
         }}
         onRefresh={reload}
+        onMarkAllRead={() => {
+          void api
+            .markAllRead({ filter: "unread", domainId, q: q || undefined })
+            .then(() => {
+              reload();
+              reloadCounters();
+            });
+        }}
         mailboxPicker={!wide}
       />
 
