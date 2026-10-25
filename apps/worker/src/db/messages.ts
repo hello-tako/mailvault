@@ -302,9 +302,18 @@ export async function insertAttachments(
  * cap the token count.
  */
 export function ftsMatch(raw: string, maxWords = 8): string {
-  return raw
-    .toLowerCase()
-    .split(/[^a-z0-9@._-]+/)
+  // A double-quoted stretch stays one FTS5 phrase ("big deal"), so a search for the
+  // sentence finds the sentence; bare words still AND together as they always did (C12).
+  const pieces = raw.toLowerCase().match(/"[^"]+"|[^\s]+/g) ?? [];
+  return pieces
+    .flatMap((piece) =>
+      piece.length > 1 && piece.startsWith('"') && piece.endsWith('"')
+        ? [piece]
+        : piece.split(/[^a-z0-9@._-]+/),
+    )
+    // Whatever shape the input came in, what reaches FTS5 is a clean quoted token — a
+    // stray quote can never become an unterminated string.
+    .map((w) => w.replace(/^"+|"+$/g, ""))
     .filter(Boolean)
     .slice(0, maxWords)
     .map((w) => `"${w}"`)
@@ -353,6 +362,22 @@ function buildListFilters(query: ListInput): { where: string; params: unknown[];
   if (intent.after) clauses.push(`m.received_at >= ?${push(intent.after)}`);
   if (intent.before) clauses.push(`m.received_at <= ?${push(intent.before)}`);
   if (intent.hasAttachment) clauses.push("m.has_attachments = 1");
+  // Chapter C12: the subject line as its own filter, and attachments by flavour.
+  if (intent.subject) {
+    clauses.push(`m.subject LIKE ?`);
+    params.push(`%${intent.subject.replace(/[%_]/g, (c) => `\\${c}`)}%`);
+  }
+  if (intent.hasImage) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM attachments ai WHERE ai.message_id = m.id AND ai.content_type LIKE 'image/%')`,
+    );
+  }
+  if (intent.hasPdf) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM attachments ap WHERE ap.message_id = m.id AND (ap.content_type = 'application/pdf' OR lower(ap.filename) LIKE '%.pdf'))`,
+    );
+  }
+
   if (intent.hasCode)
     clauses.push("(m.extracted_codes_json IS NOT NULL AND m.extracted_codes_json <> '[]')");
   // An address operator matches anywhere the address can be written, including the alias it

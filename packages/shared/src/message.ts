@@ -179,6 +179,21 @@ export const MessageDetailSchema = MessageSummarySchema.extend({
   listUnsubscribe: z.string().nullable().default(null),
   /** True when the sender declared `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. */
   oneClickUnsubscribe: z.boolean().default(false),
+  /** Parsed from an .ics attachment when one is attached and small enough (C9). */
+  calendar: z
+    .object({
+      summary: z.string().nullable(),
+      startsAt: z.string().nullable(),
+      endsAt: z.string().nullable(),
+      location: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+  /** Parsed from a .vcf attachment (C9). */
+  vcard: z
+    .object({ name: z.string().nullable(), org: z.string().nullable(), email: z.string().nullable() })
+    .nullable()
+    .optional(),
 });
 export type MessageDetail = z.infer<typeof MessageDetailSchema>;
 

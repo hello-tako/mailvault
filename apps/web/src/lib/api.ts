@@ -300,6 +300,10 @@ export const api = {
   cancelScheduled: (id: string) =>
     request<{ cancelled: boolean }>(`/scheduled/${encodeURIComponent(id)}/cancel`, mutation()),
 
+  /** Read a message in another language (C11): made on demand, never stored. */
+  translateMessage: (id: string, to: "vi" | "en") =>
+    request<{ to: string; text: string }>(`/messages/${encodeURIComponent(id)}/translate`, mutation({ to })),
+
   /** The owner's kept addresses (B10). */
   listContacts: (q?: string) =>
     request<{ items: Contact[] }>(`/contacts${q ? `?q=${encodeURIComponent(q)}` : ""}`),

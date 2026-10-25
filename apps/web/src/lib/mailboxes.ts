@@ -47,7 +47,7 @@ export function selectableMailboxes<T extends { domainId: string; mailStatus: st
  */
 export function arrivalLabel(
   m: Pick<MessageSummary, "aliasLabel" | "aliasAddress" | "domainName">,
-  scoped: boolean,
+  scoped?: boolean,
 ): string {
   if (!m.aliasLabel) return m.aliasAddress;
   return scoped ? m.aliasLabel : `${m.domainName} · ${m.aliasLabel}`;

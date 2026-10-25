@@ -7,7 +7,7 @@ import { useOutbox } from "../lib/useOutbox";
 import { formatBytes, fullTime, senderName } from "../lib/format";
 import { htmlHasContent } from "../lib/bodies";
 import { insightsOpen } from "../lib/insights";
-import { t } from "../lib/i18n";
+import { t, lang } from "../lib/i18n";
 import { MessageHtml } from "../components/MessageHtml";
 import { TextBody } from "../components/TextBody";
 import { ConfirmDialog, ErrorBanner, Loading, Menu } from "../components/ui";
@@ -57,7 +57,15 @@ export function MessageDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmResend, setConfirmResend] = useState(false);
   const [replying, setReplying] = useState(false);
+  const [replyAllCcValue, setReplyAllCcValue] = useState("");
   const [forwarding, setForwarding] = useState(false);
+  // C11: one translation at a time, for this reader only. C7: the raw header block,
+  // fetched from the .eml itself when asked for. C6: three text sizes, remembered.
+  const [translated, setTranslated] = useState<{ to: string; text: string } | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [headers, setHeaders] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number>(() => Number(localStorage.getItem("mailvault-zoom") ?? 1));
+  const [threadExcerpts, setThreadExcerpts] = useState<Record<string, string>>({});
   const markedRef = useRef<string | null>(null);
 
   const { data, error, loading, reload } = useAsync(() => api.getMessage(id, remoteImages), [id, remoteImages]);
@@ -128,6 +136,17 @@ export function MessageDetail({
   // "show anyway", because a forged code or link is exactly what a phisher wants read.
   const hidingSecrets =
     !!data && !sent && data.authVerdict !== AuthVerdict.Trusted && revealedUnverifiedId !== id;
+  // Reply-all (C8): everyone this message named, minus ourselves — the composer's To stays
+  // the sender, exactly as a plain reply, and this line becomes the copy line.
+  const replyAllCc = useMemo(() => {
+    if (!data || sent) return "";
+    const own = data.aliasAddress.toLowerCase();
+    const addrs = `${data.headerTo ?? ""}, ${data.cc ?? ""}`
+      .split(/[,\s]+/)
+      .map((a) => a.trim().toLowerCase())
+      .filter((a) => a.includes("@") && a !== own && a !== (data.envelopeFrom ?? "").toLowerCase());
+    return [...new Set(addrs)].join(", ");
+  }, [data, sent]);
   const canReply = !!data?.aliasAddress && outbox.aliases.some((a) => a.address === data.aliasAddress);
   // Mail stored before authentication existed has nothing to report; saying "not verified"
   // every time would train the owner to ignore the real warning.
@@ -246,11 +265,62 @@ export function MessageDetail({
               <button className="small" onClick={toggleRead}>
                 {t(isRead ? "msg.markUnread" : "msg.markRead")}
               </button>
+              {replyAllCc ? (
+                <button
+                  className="small"
+                  onClick={() => {
+                    setReplyAllCcValue(replyAllCc);
+                    setReplying(true);
+                  }}
+                >
+                  {t("msg.replyAll")}
+                </button>
+              ) : null}
               <Menu
                 small
                 label={t("common.more")}
                 items={[
                   { label: t("msg.forward"), onSelect: () => setForwarding(true) },
+                  { label: t("msg.print"), onSelect: () => window.print() },
+                  !sent
+                    ? {
+                        label: t("msg.translate"),
+                        onSelect: () => {
+                          if (translating) return;
+                          setTranslating(true);
+                          void api
+                            .translateMessage(id, lang() === "vi" ? "en" : "vi")
+                            .then(setTranslated)
+                            .catch(() => undefined)
+                            .finally(() => setTranslating(false));
+                        },
+                      }
+                    : null,
+                  !sent && !headers
+                    ? {
+                        label: t("msg.fullHeaders"),
+                        onSelect: () => {
+                          void fetch(rawMessageHref(id))
+                            .then((r) => r.text())
+                            .then((raw) => setHeaders(raw.slice(0, raw.indexOf("\r\n\r\n") > 0 ? raw.indexOf("\r\n\r\n") : 4000)))
+                            .catch(() => setHeaders(null));
+                        },
+                      }
+                    : null,
+                  senderDomain
+                    ? {
+                        label: t("msg.blockSender"),
+                        onSelect: () => {
+                          void api
+                            .createRule({
+                              match: { senderDomain },
+                              action: { archive: true, tag: "Blocked" },
+                            })
+                            .then(() => setNotice(t("msg.blocked")))
+                            .catch(() => undefined);
+                        },
+                      }
+                    : null,
                   ...(!sent && data.envelopeFrom
                     ? [
                         {
@@ -291,7 +361,7 @@ export function MessageDetail({
                     },
                   },
                   { label: t("msg.delete"), onSelect: () => setConfirmDelete(true), danger: true },
-                ]}
+                ].filter(Boolean as never)}
               />
             </div>
           </header>
@@ -347,10 +417,34 @@ export function MessageDetail({
           )}
 
           {!hidingSecrets && (
-          <section className="mail-body mt">
+          <section className="mail-body mt" style={{ fontSize: [14, 15, 17][zoom] }}>
             <div className="row spread wrap body-bar">
               <h2>{t("msg.body")}</h2>
               <div className="row wrap body-tools">
+                <button
+                  className="small ghost"
+                  aria-label={t("msg.zoomOut")}
+                  disabled={zoom === 0}
+                  onClick={() => {
+                    const next = Math.max(0, zoom - 1);
+                    setZoom(next);
+                    localStorage.setItem("mailvault-zoom", String(next));
+                  }}
+                >
+                  A−
+                </button>
+                <button
+                  className="small ghost"
+                  aria-label={t("msg.zoomIn")}
+                  disabled={zoom === 2}
+                  onClick={() => {
+                    const next = Math.min(2, zoom + 1);
+                    setZoom(next);
+                    localStorage.setItem("mailvault-zoom", String(next));
+                  }}
+                >
+                  A+
+                </button>
                 {html && (
                   <button className="small ghost" onClick={() => setShowText((s) => !s)}>
                     {t(showText ? "msg.showHtml" : "msg.showPlain")}
@@ -414,6 +508,63 @@ export function MessageDetail({
               </div>
             </section>
           )}
+
+          {/* C11: the translation lives under the body it answers, for this reader only. */}
+          {translated ? (
+            <div className="mt">
+              <Fold title={t("msg.translated")} open>
+                <div className="text-body" style={{ whiteSpace: "pre-wrap" }}>{translated.text}</div>
+              </Fold>
+            </div>
+          ) : null}
+          {translating ? <p className="faint mt">{t("msg.translating")}</p> : null}
+
+          {/* C7: the untouched header block, straight from the stored .eml. */}
+          {headers ? (
+            <div className="mt">
+              <Fold title={t("msg.fullHeaders")} open>
+                <pre className="text-plain" style={{ maxHeight: 320, overflow: "auto" }}>{headers}</pre>
+              </Fold>
+            </div>
+          ) : null}
+
+          {/* C9: an invite the mailbox can read, and a contact card it can keep. */}
+          {data.calendar ? (
+            <div className="mt">
+              <Fold title={t("msg.inviteTitle")} open={insights}>
+                <div className="stack">
+                  {data.calendar.summary ? <div><b>{data.calendar.summary}</b></div> : null}
+                  {data.calendar.startsAt ? <div>🕒 {data.calendar.startsAt}</div> : null}
+                  {data.calendar.endsAt ? <div>→ {data.calendar.endsAt}</div> : null}
+                  {data.calendar.location ? <div>📍 {data.calendar.location}</div> : null}
+                </div>
+              </Fold>
+            </div>
+          ) : null}
+          {data.vcard ? (
+            <div className="mt">
+              <Fold title={t("msg.vcardTitle")} open={insights}>
+                <div className="stack">
+                  {data.vcard.name ? <div><b>{data.vcard.name}</b></div> : null}
+                  {data.vcard.org ? <div className="muted">{data.vcard.org}</div> : null}
+                  {data.vcard.email ? <div className="addr">{data.vcard.email}</div> : null}
+                  {data.vcard.email ? (
+                    <button
+                      className="small"
+                      onClick={() => {
+                        void api
+                          .saveContact({ address: data.vcard!.email ?? "", name: data.vcard!.name })
+                          .then(() => setNotice(t("msg.contactSaved")))
+                          .catch(() => undefined);
+                      }}
+                    >
+                      {t("msg.saveContact")}
+                    </button>
+                  ) : null}
+                </div>
+              </Fold>
+            </div>
+          ) : null}
 
           {/* Everything that explains the message rather than being it. */}
           {links.length > 0 && !hidingSecrets && (
@@ -511,7 +662,20 @@ export function MessageDetail({
                   {/* Same content either way; only the gesture differs, and it is the one the
                       surrounding screen can honour — a pane swaps, a page navigates. */}
                   {onOpenMessage ? (
-                    <button type="button" className="thread-link" onClick={() => onOpenMessage(m.id)}>
+                    <button
+                      type="button"
+                      className="thread-link"
+                      onClick={() => {
+                        onOpenMessage(m.id);
+                        if (threadExcerpts[m.id]) {
+                          setThreadExcerpts((cur) => { const next = { ...cur }; delete next[m.id]; return next; });
+                        } else {
+                          void api.getMessage(m.id).then((full) => {
+                            setThreadExcerpts((cur) => ({ ...cur, [m.id]: (full.textBody ?? "").slice(0, 400) }));
+                          });
+                        }
+                      }}
+                    >
                       {entry}
                     </button>
                   ) : (
@@ -519,7 +683,10 @@ export function MessageDetail({
                       {entry}
                     </Link>
                   )}
-                </li>
+                
+                  {threadExcerpts[m.id] ? (
+                    <pre className="thread-excerpt">{threadExcerpts[m.id]}</pre>
+                  ) : null}</li>
               );
             })}
           </ol>
@@ -549,11 +716,12 @@ export function MessageDetail({
         <Suspense fallback={null}>
           <Composer
             replyTo={data}
+            initialCc={replyAllCcValue}
             sendableAliases={outbox.aliases}
             remaining={outbox.capabilities?.remaining ?? 0}
             bindingMissing={outbox.capabilities?.bindingMissing}
             onScheduled={() => setNotice(t("msg.scheduled"))}
-            onClose={() => setReplying(false)}
+            onClose={() => { setReplying(false); setReplyAllCcValue(""); }}
             onSent={() => {
               setReplying(false);
               reload();

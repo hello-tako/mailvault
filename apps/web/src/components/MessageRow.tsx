@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link } from "../lib/router";
 import { relativeTime, sendPill, senderName } from "../lib/format";
 import { arrivalLabel } from "../lib/mailboxes";
@@ -55,23 +55,25 @@ export function MsgItem({
   onOpen,
   onSelect,
   onStar,
+  swipe = false,
+  onSwipeArchive,
+  onSwipeRead,
 }: {
   m: MessageSummary;
-  scoped: boolean;
-  fresh: boolean;
-  active: boolean;
-  wide: boolean;
+  scoped?: boolean;
+  fresh?: boolean;
+  active?: boolean;
+  wide?: boolean;
   selected?: boolean;
-  onOpen: (id: string) => void;
-  /**
-   * `shift` is the modifier the row was clicked with — a range is only meaningful there.
-   * Both handlers are optional because selection and starring are inbox actions: the
-   * dashboard's "recent" list shows the same rows without pretending to be a list you work
-   * through, so it passes neither and gets neither control.
-   */
-  onSelect?: (id: string, shift: boolean) => void;
+  onOpen: (id: string | null) => void;
+  onSelect?: (id: string, shift?: boolean) => void;
   onStar?: (m: MessageSummary) => void;
-}) {
+  /** Phone gesture (C6): a deliberate horizontal drag acts on the row. */
+  swipe?: boolean;
+  onSwipeArchive?: () => void;
+  onSwipeRead?: () => void;
+}) {  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+
   const sender = senderName(m.headerFrom, m.envelopeFrom);
   const sent = m.direction === MessageDirection.Out;
   const href = wide ? `/inbox?open=${encodeURIComponent(m.id)}` : `/messages/${m.id}`;
@@ -86,7 +88,19 @@ export function MsgItem({
       className={`msg ${m.isRead ? "" : "unread"} ${fresh ? "is-live" : ""} ${active ? "is-active" : ""} ${sent ? "is-sent" : ""} ${selected ? "is-selected" : ""} ${onSelect ? "is-selectable" : ""}`}
       data-verdict={m.authVerdict}
       data-msg-id={m.id}
-    >
+    
+      onPointerDown={swipe ? (e) => { swipeStart.current = { x: e.clientX, y: e.clientY }; } : undefined}
+      onPointerUp={swipe ? (e) => {
+        const start = swipeStart.current;
+        swipeStart.current = null;
+        if (!start) return;
+        const dx = e.clientX - start.x;
+        const dy = Math.abs(e.clientY - start.y);
+        if (dy > 48 || Math.abs(dx) < 64) return;
+        if (dx < 0) onSwipeArchive?.();
+        else onSwipeRead?.();
+      } : undefined}
+      >
       <div className="msg-row">
         {/* The checkbox is always visible, not revealed on hover like the other row actions:
             a control you cannot find cannot start a selection, and on a touch screen there is

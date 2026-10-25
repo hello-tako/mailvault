@@ -18,7 +18,7 @@ export const SearchFolder = {
 } as const;
 
 export interface SearchToken {
-  kind: "from" | "to" | "has" | "is" | "in" | "after" | "before";
+  kind: "from" | "to" | "has" | "is" | "in" | "after" | "before" | "subject";
   /** Normalised value, not what was typed: `has:FILES` becomes `attachment`. */
   value: string;
   /**
@@ -47,15 +47,25 @@ export interface SearchIntent {
   after?: string;
   before?: string;
   tokens: SearchToken[];
+  /** Words that must appear in the subject line (C12). */
+  subject?: string;
+  /** Filter by attachment flavour: pictures or documents (C12). */
+  hasImage?: boolean;
+  hasPdf?: boolean;
 }
 
-const HAS_VALUES: Record<string, "attachment" | "code"> = {
+const HAS_VALUES: Record<string, "attachment" | "code" | "image" | "pdf"> = {
   attachment: "attachment",
   attachments: "attachment",
   file: "attachment",
   files: "attachment",
   code: "code",
   otp: "code",
+  image: "image",
+  images: "image",
+  picture: "image",
+  pdf: "pdf",
+  pdfs: "pdf",
 };
 
 const IS_VALUES: Record<string, "unread" | "read" | "starred"> = {
@@ -116,6 +126,10 @@ export function parseSearchQuery(raw: string | undefined, now = new Date()): Sea
         intent.from = value.toLowerCase();
         intent.tokens.push({ kind: "from", value, raw: piece });
         break;
+      case "subject":
+        intent.subject = value.toLowerCase();
+        intent.tokens.push({ kind: "subject", value, raw: piece });
+        break;
       case "to":
         intent.to = value.toLowerCase();
         intent.tokens.push({ kind: "to", value, raw: piece });
@@ -127,7 +141,9 @@ export function parseSearchQuery(raw: string | undefined, now = new Date()): Sea
           break;
         }
         if (what === "attachment") intent.hasAttachment = true;
-        else intent.hasCode = true;
+        else if (what === "code") intent.hasCode = true;
+        else if (what === "image") intent.hasImage = true;
+        else if (what === "pdf") intent.hasPdf = true;
         intent.tokens.push({ kind: "has", value: what, raw: piece });
         break;
       }

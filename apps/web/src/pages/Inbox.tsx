@@ -146,6 +146,11 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
     return merged;
   }, [data, flagOverrides, view]);
   const orderedIds = useMemo(() => items.map((m) => m.id), [items]);
+  const splitRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const saved = localStorage.getItem("mailvault-pane-width");
+    if (saved && splitRef.current) splitRef.current.style.setProperty("--pane-w", `${saved}px`);
+  });
   const selection = useSelection(orderedIds);
 
   // A different list of rows is a different selection: keeping ids that are no longer on
@@ -409,13 +414,26 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
                 onDelete={() => setConfirmDelete(true)}
               />
             ) : null}
-            <ul className="msglist">
+            <ul className={`msglist ${localStorage.getItem("mailvault-density") === "compact" ? "compact" : ""}`}>
               {items.map((m, i) => (
                 <Fragment key={m.id}>
                   {daySeparator(items[i - 1]?.receivedAt, m.receivedAt)}
                 <MsgItem
                   key={m.id}
                   m={m}
+                  swipe={!wide}
+                  onSwipeArchive={() => {
+                    void api.bulkMessages([m.id], BulkMessageAction.Archive).then(() => {
+                      reload();
+                      reloadCounters();
+                    });
+                  }}
+                  onSwipeRead={() => {
+                    void api.bulkMessages([m.id], m.isRead ? BulkMessageAction.Unread : BulkMessageAction.Read).then(() => {
+                      reload();
+                      reloadCounters();
+                    });
+                  }}
                   scoped={scoped}
                   fresh={fresh.has(m.id)}
                   active={m.id === openId}
@@ -539,8 +557,31 @@ export function Inbox({ aliasId, domainId }: { aliasId?: string; domainId?: stri
       {view === "sent" ? <ScheduledStrip /> : null}
 
       {wide && openId ? (
-        <div className="mail-split">
+        <div className="mail-split" ref={splitRef}>
           <div className="mail-list">{list}</div>
+          <div
+            className="pane-handle"
+            role="separator"
+            aria-orientation="vertical"
+            onPointerDown={(e) => {
+              const el = splitRef.current;
+              if (!el) return;
+              e.currentTarget.setPointerCapture(e.pointerId);
+              const set = (clientX: number) => {
+                const w = Math.min(Math.max(window.innerWidth - clientX, 320), 720);
+                el.style.setProperty("--pane-w", `${w}px`);
+                return w;
+              };
+              const move = (ev: PointerEvent) => set(ev.clientX);
+              const up = (ev: PointerEvent) => {
+                window.removeEventListener("pointermove", move);
+                window.removeEventListener("pointerup", up);
+                localStorage.setItem("mailvault-pane-width", String(Math.round(set(ev.clientX))));
+              };
+              window.addEventListener("pointermove", move);
+              window.addEventListener("pointerup", up);
+            }}
+          />
           <div className="mail-pane" key={openId}>
             <Suspense fallback={null}>
               <MessageDetail
