@@ -12,6 +12,7 @@ export type IrreversibleOperation =
   | "provision.catch-all-takeover"
   | "semantic.purge"
   | "dmarc.takeover"
+  | "provision.spf-merge"
   | "auth-policy.weaken"
   | "passkey.remove"
   | "passkey.enroll";

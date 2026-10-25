@@ -5,18 +5,18 @@ import {
   AuthPolicy,
   DomainIdsBodySchema,
   PreflightClassification,
-  type DiscoveredZone,
-} from "@mailvault/shared";
+  type DiscoveredZone, ConfirmationTokenSchema } from "@mailvault/shared";
 import type { AppEnv } from "../app-env";
 import { domainDenylist } from "../env";
 import {
   getDomainByZoneId,
   listDomains,
+  recordProvisioningEvent,
   setDomainAuthPolicy,
   upsertDiscoveredZones,
 } from "../db/domains";
 import { preflightMany, provisionMany, provisionDomain } from "../provisioning/provisioner";
-import { buildSetupNext, type SetupSnapshot } from "../provisioning/setup";
+import { buildSetupNext, mergeSpfRecords, type SetupSnapshot } from "../provisioning/setup";
 import { publicMxResolvable, runWatchdog } from "../provisioning/watchdog";
 import { log } from "../lib/logging";
 import { badRequest, notFound, AppError } from "../lib/errors";
@@ -24,6 +24,9 @@ import { actorOf, asApiError, cfClient, readJson } from "./_helpers";
 import { requireStepUp } from "./security";
 import { preflightZone, verifyDeliveryPath } from "../provisioning/preflight";
 import { getSetting, setSetting } from "../db/settings";
+import { newId } from "../lib/util";
+import { sendOutbound } from "../mail/send";
+import { createAlias, deleteAlias } from "../db/aliases";
 import type { CfDnsRecord } from "../cf/types";
 
 const ZoneIdParam = z.object({ id: z.string().min(1) });
@@ -76,6 +79,18 @@ async function authorizeTakeovers(
     if (flags.allowCatchAllTakeover && path.foreignCatchAll)
       await requireStepUp(c, "provision.catch-all-takeover");
   }
+}
+
+
+/** The probe's sender: the first alias on a sending-enabled domain. */
+async function listSendingEnabledDomains(db: D1Database): Promise<Array<{ aliasAddress: string }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT a.address AS aliasAddress FROM aliases a JOIN domains d ON d.id = a.domain_id
+       WHERE d.sending_status = 'ENABLED' AND a.status = 'ACTIVE' ORDER BY a.created_at ASC LIMIT 1`,
+    )
+    .all<{ aliasAddress: string }>();
+  return (results ?? []).map((r) => ({ aliasAddress: r.aliasAddress }));
 }
 
 export const domainsRoute = new Hono<AppEnv>()
@@ -187,6 +202,115 @@ export const domainsRoute = new Hono<AppEnv>()
     } catch (err) {
       throw asApiError(err);
     }
+  })
+
+  /**
+   * Merge a zone's duplicate SPF records into one (plan W3). Destructive — old records are
+   * deleted, each one logged to the event stream first, exactly like the MX take-over — so
+   * it needs the owner's explicit tick and the passkey.
+   */
+  .post("/api/domains/:id/spf-merge", async (c) => {
+    const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const domain = await getDomainByZoneId(c.env.DB, zoneId);
+    if (!domain) throw notFound("Domain not found");
+    await readJson(c, ConfirmationTokenSchema);
+    await requireStepUp(c, "provision.spf-merge");
+    const client = cfClient(c.env);
+
+    const records = await client.listDnsRecords(zoneId, "TXT");
+    const spf = records.filter((r) => /^v=spf1/i.test((r.content ?? "").trim()));
+    if (spf.length < 2) return c.json({ merged: false, reason: "fewer than two SPF records" });
+
+    const merged = mergeSpfRecords(spf.map((r) => r.content ?? ""));
+    if (!merged) return c.json({ merged: false, reason: "merge produced nothing" });
+
+    // Say what is about to be replaced, then do it: create, verify, delete — the same
+    // order that keeps a domain never without its records.
+    await recordProvisioningEvent(c.env.DB, domain.id, "provision:spf_merge", "RUNNING", {
+      removing: spf.map((r) => ({ id: r.id, name: r.name, content: r.content })),
+      creating: merged,
+    });
+    const created = await client.createDnsRecord(zoneId, { type: "TXT", name: spf[0]!.name, content: merged });
+    const after = await client.listDnsRecords(zoneId, "TXT");
+    if (!after.some((r) => r.id === created.id)) {
+      await recordProvisioningEvent(c.env.DB, domain.id, "provision:spf_merge", "FAILED", {
+        reason: "created record did not appear",
+      });
+      return c.json({ merged: false, reason: "created record did not appear" });
+    }
+    for (const r of spf) {
+      await client.deleteDnsRecord(zoneId, r.id);
+    }
+    await recordProvisioningEvent(c.env.DB, domain.id, "provision:spf_merge", "DONE", { content: merged });
+    log.info("spf_merged", { zoneId, removed: spf.length, actor: actorOf(c).email });
+    return c.json({ merged: true, content: merged, removed: spf.length });
+  })
+
+  /**
+   * Send a probe — a real letter from a sending-enabled domain to a fresh alias on this
+   * one (plan W4/A8) — then let the wizard poll for its arrival.
+   */
+  .post("/api/domains/:id/probe", async (c) => {
+    const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const domain = await getDomainByZoneId(c.env.DB, zoneId);
+    if (!domain) throw notFound("Domain not found");
+    if (domain.mailStatus !== "READY") {
+      throw new AppError(409, "NOT_READY", "Enable receiving on this domain first — the probe has nowhere to land.");
+    }
+    const senders = await listSendingEnabledDomains(c.env.DB);
+    if (senders.length === 0) {
+      throw new AppError(
+        409,
+        "NO_SENDER",
+        "No domain is enabled for sending yet. Enable Email Sending on one domain first, then the probe can travel.",
+      );
+    }
+    const sender = senders[0]!;
+    const local = `setup-probe-${newId().slice(0, 8)}`;
+    const alias = await createAlias(c.env.DB, {
+      domainId: domain.id,
+      domainName: domain.name,
+      localPart: local,
+      label: "Setup probe",
+    });
+    const result = await sendOutbound(
+      {
+        idempotencyKey: `probe-${alias.id}`,
+        fromAddress: sender.aliasAddress,
+        to: [alias.address],
+        subject: `MailVault setup probe — ${domain.name}`,
+        text:
+          "This is an automated probe sent by Mail Setup to prove the whole road works: " +
+          "out through Email Sending, back in through Email Routing. It may be deleted.",
+      },
+      c.env,
+      c.env.DB,
+      c.env.MAIL_BUCKET,
+    );
+    if (!result.ok) {
+      await deleteAlias(c.env.DB, alias.id, false);
+      throw new AppError(502, result.code, result.message);
+    }
+    log.info("setup_probe_sent", { zoneId, aliasId: alias.id, from: sender.aliasAddress });
+    return c.json({ probeAddress: alias.address, aliasId: alias.id, sentAt: new Date().toISOString() }, 201);
+  })
+
+  /** Did the probe arrive? When it does, the probe alias cleans itself up with it. */
+  .get("/api/domains/:id/probe", async (c) => {
+    const aliasId = c.req.query("aliasId") ?? "";
+    const arrived = await c.env.DB
+      .prepare(
+        `SELECT m.id AS mid FROM messages m JOIN aliases a ON a.id = m.alias_id
+         WHERE a.id = ?1 AND m.direction = 'IN' AND m.received_at >= datetime('now', '-15 minutes') LIMIT 1`,
+      )
+      .bind(aliasId)
+      .first<{ mid: string }>();
+    if (arrived) {
+      // The probe proved the road; its alias and its letter were system artifacts.
+      await deleteAlias(c.env.DB, aliasId, true);
+      return c.json({ arrived: true, messageId: arrived.mid });
+    }
+    return c.json({ arrived: false });
   })
 
   /**

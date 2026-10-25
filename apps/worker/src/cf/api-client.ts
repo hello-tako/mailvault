@@ -54,7 +54,8 @@ export interface CloudflareClient {
   listAllZones(): Promise<CfZone[]>;
   listDnsRecords(zoneId: string, type?: string): Promise<CfDnsRecord[]>;
   /** Used only by an owner-confirmed MX takeover; the record is audited before deletion. */
-  deleteDnsRecord(zoneId: string, recordId: string): Promise<void>;
+  createDnsRecord(zoneId: string, record: { type: string; name: string; content: string; priority?: number }): Promise<CfDnsRecord>;
+    deleteDnsRecord(zoneId: string, recordId: string): Promise<void>;
   getEmailRoutingStatus(zoneId: string): Promise<CfEmailRoutingSettings>;
   getEmailRoutingDns(zoneId: string): Promise<CfEmailRoutingDnsRecord[]>;
   enableEmailRouting(zoneId: string): Promise<void>;
@@ -188,6 +189,21 @@ export function createCloudflareClient(options: CloudflareClientOptions): Cloudf
 
     async listDnsRecords(zoneId, type): Promise<CfDnsRecord[]> {
       return pagedAll<CfDnsRecord>(`/zones/${zoneId}/dns_records`, type ? { type } : undefined);
+    },
+
+    // The one DNS write MailVault needs (plan W3/A5): creating Cloudflare's routing MX as
+    // the fallback when /email/routing/enable refuses, and the merged SPF record. Kept to a
+    // single create call — deletes go through the existing, event-logged path.
+    async createDnsRecord(zoneId, record): Promise<CfDnsRecord> {
+      return requestResult<CfDnsRecord>("POST", `/zones/${zoneId}/dns_records`, {
+        body: {
+          type: record.type,
+          name: record.name,
+          content: record.content,
+          ...(record.priority != null ? { priority: record.priority } : {}),
+          ttl: 1,
+        },
+      });
     },
 
     async deleteDnsRecord(zoneId, recordId): Promise<void> {
