@@ -81,6 +81,30 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [takeover, setTakeover] = useState(false);
+  // W4: one probe at a time — send, then poll; the worker cleans the alias up on arrival.
+  const [probe, setProbe] = useState<{ arrived: boolean; aliasId: string; messageId?: string } | null>(null);
+  const [pollCount, setPollCount] = useState(0);
+
+  const pollProbe = useCallback(
+    (aliasId?: string) => {
+      const id = aliasId ?? probe?.aliasId;
+      if (!id) return;
+      setBusy(true);
+      void api
+        .setupProbeStatus(zoneId, id)
+        .then((r) => {
+          setPollCount((n) => n + 3);
+          if (r.arrived) {
+            setProbe({ arrived: true, aliasId: id, messageId: r.messageId });
+            setNotice(t("wiz.probeArrived"));
+            onChanged();
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => setBusy(false));
+    },
+    [probe?.aliasId, zoneId, onChanged],
+  );
 
   const load = useCallback(() => {
     setData(null);
@@ -207,7 +231,66 @@ export function SetupWizard({
 
           {next.includes("spf-merge") ? (
             <StepCard tone="warn" title={t("wiz.spfTitle")} detail={data.spf.records.join("  ·  ")}>
-              <span className="faint">{t("wiz.spfDetail")}</span>
+              <span className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+                <span className="faint">{t("wiz.spfDetail")}</span>
+                <button
+                  className="small"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setNotice(null);
+                    void withStepUp(() => api.mergeSpf(zoneId))
+                      .then((r) => {
+                        setNotice(r.merged ? t("wiz.spfMerged", { content: r.content ?? "" }) : t("wiz.spfSkip", { reason: r.reason ?? "" }));
+                        onChanged();
+                        load();
+                      })
+                      .catch((e) => setError(e instanceof ApiClientError ? e.message : String(e)))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  {t("wiz.spfMerge")}
+                </button>
+              </span>
+            </StepCard>
+          ) : null}
+
+          {receivingOk && data.sending.enabled ? (
+            <StepCard tone={probe ? (probe.arrived ? "ok" : "warn") : "quiet"} title={t("wiz.probeTitle")} detail={
+              probe
+                ? probe.arrived
+                  ? t("wiz.probeArrived")
+                  : t("wiz.probeWaiting")
+                : t("wiz.probeDetail")
+            }>
+              {probe && !probe.arrived ? (
+                <span className="row" style={{ gap: 8 }}>
+                  <span className="faint">{pollCount > 0 ? `${pollCount}s` : ""}</span>
+                  <button className="small" disabled={busy} onClick={() => void pollProbe()}>
+                    {t("wiz.dnsRetry")}
+                  </button>
+                </span>
+              ) : !probe ? (
+                <button
+                  className="small"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError(null);
+                    void api
+                      .sendSetupProbe(zoneId)
+                      .then((r) => {
+                        setProbe({ arrived: false, aliasId: r.aliasId });
+                        setNotice(t("wiz.probeSent", { address: r.probeAddress }));
+                        void pollProbe(r.aliasId);
+                      })
+                      .catch((e) => setError(e instanceof ApiClientError ? e.message : String(e)))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  {t("wiz.probeSend")}
+                </button>
+              ) : null}
             </StepCard>
           ) : null}
 

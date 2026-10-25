@@ -179,6 +179,24 @@ export const api = {
       "/domains/sync",
       mutation(),
     ),
+  /** Merge a zone's duplicate SPF records (W3): confirm + passkey, one new record. */
+  mergeSpf: (zoneId: string) =>
+    request<{ merged: boolean; content?: string; reason?: string }>(
+      `/domains/${encodeURIComponent(zoneId)}/spf-merge`,
+      mutation({ confirm: true }),
+    ),
+
+  /** Send a probe letter to a fresh alias on this domain (W4/A8). */
+  sendSetupProbe: (zoneId: string) =>
+    request<{ probeAddress: string; aliasId: string; sentAt: string }>(
+      `/domains/${encodeURIComponent(zoneId)}/probe`,
+      mutation({}),
+    ),
+  setupProbeStatus: (zoneId: string, aliasId: string) =>
+    request<{ arrived: boolean; messageId?: string }>(
+      `/domains/${encodeURIComponent(zoneId)}/probe?aliasId=${encodeURIComponent(aliasId)}`,
+    ),
+
   /** The Mail Setup wizard's one-read diagnosis (W1): read-only, ordered next steps. */
   domainSetup: (zoneId: string) =>
     request<Record<string, unknown>>(`/domains/${encodeURIComponent(zoneId)}/setup`),
