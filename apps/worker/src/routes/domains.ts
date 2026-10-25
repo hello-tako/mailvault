@@ -17,6 +17,7 @@ import {
 } from "../db/domains";
 import { preflightMany, provisionMany, provisionDomain } from "../provisioning/provisioner";
 import { buildSetupNext, mergeSpfRecords, type SetupSnapshot } from "../provisioning/setup";
+import { runFullSetup, tokenReport } from "../provisioning/setup-run";
 import { publicMxResolvable, runWatchdog } from "../provisioning/watchdog";
 import { log } from "../lib/logging";
 import { badRequest, notFound, AppError } from "../lib/errors";
@@ -30,6 +31,7 @@ import { createAlias, deleteAlias } from "../db/aliases";
 import type { CfDnsRecord } from "../cf/types";
 
 const ZoneIdParam = z.object({ id: z.string().min(1) });
+const SetupRunBody = z.object({ primaryLocal: z.string().trim().min(1).max(64).optional() });
 
 /** The auto-provision switch: "1" means a Sync may itself provision newly discovered zones
  * that preflight clears as READY_TO_PROVISION — never anything with a conflict, because
@@ -202,6 +204,27 @@ export const domainsRoute = new Hono<AppEnv>()
     } catch (err) {
       throw asApiError(err);
     }
+  })
+
+  /** The one button (W6): token doctor, receiving, first alias, sending, sending-via,
+   * verify — server-side, clean path only, every blocker said out loud. */
+  .post("/api/domains/:id/setup-run", async (c) => {
+    const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const body = await readJson(c, SetupRunBody);
+    const workerName = requireWorkerName(c.env);
+    if (!c.env.CLOUDFLARE_API_TOKEN) {
+      throw new AppError(503, "NO_TOKEN", "This server has no Cloudflare API token configured.");
+    }
+    const result = await runFullSetup(c.env, zoneId, { primaryLocal: body.primaryLocal, workerName });
+    log.info("domains_setup_run", { zoneId, actor: actorOf(c).email, ok: result.ok });
+    return c.json(result);
+  })
+
+  /** Per-capability token report (W5): read-only probes, each naming its permission. */
+  .get("/api/domains/:id/token-report", async (c) => {
+    const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const client = cfClient(c.env);
+    return c.json({ checks: await tokenReport(client, zoneId) });
   })
 
   /**
