@@ -223,8 +223,10 @@ export const domainsRoute = new Hono<AppEnv>()
   /** Per-capability token report (W5): read-only probes, each naming its permission. */
   .get("/api/domains/:id/token-report", async (c) => {
     const { id: zoneId } = ZoneIdParam.parse({ id: c.req.param("id") });
+    const domain = await getDomainByZoneId(c.env.DB, zoneId);
+    if (!domain) throw notFound("Domain not found");
     const client = cfClient(c.env);
-    return c.json({ checks: await tokenReport(client, zoneId) });
+    return c.json({ checks: await tokenReport(client, zoneId, domain.name) });
   })
 
   /**

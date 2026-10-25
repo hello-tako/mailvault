@@ -35,16 +35,31 @@ export interface SetupRunResult {
   ok: boolean;
 }
 
-/** Probe each capability the setup needs, read-only, in parallel (W5). */
-export async function tokenReport(client: CloudflareClient, zoneId: string): Promise<TokenCheck[]> {
+/**
+ * Probe each capability the setup needs, read-only, in parallel (W5).
+ *
+ * A check fails only on 401/403 — the answer "this token may not". Any other outcome
+ * (a 400 from a business rule, a 404 the endpoint itself normalises) means the token
+ * COULD call the endpoint, which is all this report is about. Measured lesson: Email
+ * Sending permissions exist only at Account level, and a preview called with a name that
+ * is not a subdomain of the zone answers 400 — neither is a permission problem, and the
+ * first draft of this probe reported both as one.
+ */
+export async function tokenReport(
+  client: CloudflareClient,
+  zoneId: string,
+  domainName: string,
+): Promise<TokenCheck[]> {
   const probe = async (capability: string, permission: string, fn: () => Promise<unknown>): Promise<TokenCheck> => {
     try {
       await fn();
       return { capability, ok: true, permission };
-    } catch {
-      // An unreachable zone is a Zone Resources answer; a 403 on a reachable one is a
-      // permission answer. Either way this check names what to add.
-      return { capability, ok: false, permission };
+    } catch (err) {
+      const status = err instanceof CloudflareApiError ? err.status : undefined;
+      if (status === 401 || status === 403) return { capability, ok: false, permission };
+      // Not an auth answer — the token reached the endpoint and was refused for other
+      // reasons. That is beyond this report's scope.
+      return { capability, ok: true, permission };
     }
   };
   return Promise.all([
@@ -52,10 +67,11 @@ export async function tokenReport(client: CloudflareClient, zoneId: string): Pro
       client.listDnsRecords(zoneId, "MX"),
     ),
     probe("dns.read", "Zone → DNS → Read", () => client.listDnsRecords(zoneId, "TXT")),
-    probe("emailRouting.read", "Zone → Email Routing Rules → Read", () => client.getCatchAll(zoneId)),
-    probe("emailSending.read", "Zone → Email Sending → Read", () => client.listSendingDomains(zoneId)),
-    probe("emailSending.preview", "Zone → Email Sending → Edit (preview is part of it)", () =>
-      client.previewSending(zoneId, "probe.invalid"),
+    probe("emailRouting.read", "Zone → Email Routing Rules → Edit", () => client.getCatchAll(zoneId)),
+    probe("emailSending.read", "Account → Email Sending → Edit", () => client.listSendingDomains(zoneId)),
+    // The preview name must be a subdomain of THIS zone for the call to mean anything.
+    probe("emailSending.preview", "Account → Email Sending → Edit", () =>
+      client.previewSending(zoneId, `probe.${domainName}`),
     ),
   ]);
 }
@@ -80,7 +96,7 @@ export async function runFullSetup(
   };
 
   // 1 — Token: every capability the run needs, before touching anything.
-  const checks = await tokenReport(client, zoneId);
+  const checks = await tokenReport(client, zoneId, domain.name);
   const failing = checks.filter((c) => !c.ok);
   steps.push({
     id: "token",
